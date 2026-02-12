@@ -27,18 +27,18 @@ public class SimRaDataLoader implements CommandLineRunner {
 
     private final RideRepository rideRepository;
     private final SimRaFileParser parser;
+    private final GraphHopperMapMatchingService mapMatchingService;
 
     @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
     private String dataPath;
 
-    // Use a custom ForkJoinPool to limit concurrency and avoid exhausting resources (DB, Memory)
-    // Adjust parallelism based on available cores/DB pool size.
-    // Hikari default is 10. Let's be conservative to avoid starvation.
     private final ForkJoinPool customThreadPool = new ForkJoinPool(5);
 
-    public SimRaDataLoader(RideRepository rideRepository, SimRaFileParser parser) {
+    public SimRaDataLoader(RideRepository rideRepository, SimRaFileParser parser,
+                           GraphHopperMapMatchingService mapMatchingService) {
         this.rideRepository = rideRepository;
         this.parser = parser;
+        this.mapMatchingService = mapMatchingService;
     }
 
     @Override
@@ -61,7 +61,7 @@ public class SimRaDataLoader implements CommandLineRunner {
                 .filter(path -> path.toString().contains("Rides"))
                 .filter(path -> path.getFileName().toString().startsWith("VM"))
                 .filter(path -> !existingFiles.contains(path.getFileName().toString()))
-                .collect(Collectors.toList());
+                .toList();
         } catch (IOException e) {
             log.error("Error walking file tree", e);
             return;
@@ -106,8 +106,8 @@ public class SimRaDataLoader implements CommandLineRunner {
                 return;
             }
 
-            // Save individual ride (transactional by default)
-            rideRepository.save(ride);
+            Ride savedRide = rideRepository.save(ride);
+            mapMatchingService.mapMatch(savedRide);
 
         } catch (IOException e) {
             throw new RuntimeException("Error reading file " + filename, e);

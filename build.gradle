@@ -29,7 +29,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.hibernate.orm:hibernate-spatial'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    implementation 'com.opencsv:opencsv:5.9'
+    implementation 'de.siegmar:fastcsv:3.4.0'
+    implementation 'com.graphhopper:graphhopper-core:11.0'
+    implementation('com.graphhopper:graphhopper-map-matching:11.0')
     runtimeOnly 'org.postgresql:postgresql'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
