@@ -39,7 +39,7 @@ public class Incident {
 
     private Boolean scary;
 
-    @Column(length = 1000)
+    @Column(columnDefinition = "text")
     private String description;
 
     @ElementCollection(targetClass = ParticipantType.class)

@@ -1,12 +1,25 @@
 services:
   postgres:
-    image: postgis/postgis:16-3.4
+    image: postgis/postgis:17-3.4
     ports:
       - "5432:5432"
     environment:
       POSTGRES_DB: cyclingdb
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
+    # PostgreSQL configuration for connection pooling
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "idle_in_transaction_session_timeout=35min"
+      - "-c"
+      - "statement_timeout=60s"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "work_mem=64MB"
 
   pgadmin:
     image: dpage/pgadmin4

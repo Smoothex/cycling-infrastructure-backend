@@ -2,6 +2,8 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
+import berlin.tu.cyclinginfrastructurebackend.util.ImportMetrics;
+import berlin.tu.cyclinginfrastructurebackend.util.RideAnalyzer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,8 +18,6 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Component
@@ -32,7 +32,8 @@ public class SimRaDataLoader implements CommandLineRunner {
     @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
     private String dataPath;
 
-    private final ForkJoinPool customThreadPool = new ForkJoinPool(5);
+    private final int threadCount = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+    private final ForkJoinPool customThreadPool = new ForkJoinPool(threadCount);
 
     public SimRaDataLoader(RideRepository rideRepository, SimRaFileParser parser,
                            GraphHopperMapMatchingService mapMatchingService) {
@@ -52,7 +53,7 @@ public class SimRaDataLoader implements CommandLineRunner {
         }
 
         Set<String> existingFiles = rideRepository.findAllOriginalFilenames();
-        log.info("Found {} existing rides in DB. Skipping them.", existingFiles.size());
+        log.info("Found {} existing rides in DB.", existingFiles.size());
 
         List<Path> filesToProcess;
         try (Stream<Path> stream = Files.walk(startPath)) {
@@ -69,7 +70,12 @@ public class SimRaDataLoader implements CommandLineRunner {
 
         log.info("Found {} new files to process.", filesToProcess.size());
 
-        AtomicInteger count = new AtomicInteger(0);
+        if (filesToProcess.isEmpty()) {
+            log.info("No new files to import.");
+            return;
+        }
+
+        ImportMetrics metrics = new ImportMetrics();
         int total = filesToProcess.size();
 
         // Submit to custom pool instead of common pool
@@ -77,12 +83,13 @@ public class SimRaDataLoader implements CommandLineRunner {
             customThreadPool.submit(() ->
                 filesToProcess.parallelStream().forEach(path -> {
                     try {
-                        processFile(path);
-                        int current = count.incrementAndGet();
+                        processFile(path, metrics);
+                        int current = metrics.getFilesProcessed();
                         if (current % 500 == 0) {
                             log.info("Imported {}/{} rides...", current, total);
                         }
                     } catch (Exception e) {
+                        metrics.recordFileFailed();
                         log.error("Failed to process file: " + path.getFileName(), e);
                     }
                 })
@@ -93,24 +100,133 @@ public class SimRaDataLoader implements CommandLineRunner {
             customThreadPool.shutdown();
         }
 
+        metrics.finish();
+        metrics.printSummary();
+
         log.info("SimRa data import completed.");
     }
 
-    private void processFile(Path path) {
+    private void processFile(Path path, ImportMetrics metrics) {
         String filename = path.getFileName().toString();
         try (FileInputStream fis = new FileInputStream(path.toFile())) {
-            Ride ride = parser.parse(fis, filename);
+            // Parse
+            long parseStart = System.nanoTime();
+            Ride ride;
+            try {
+                 ride = parser.parse(fis, filename);
+            } catch (IOException e) {
+                if (e.getMessage() != null && (e.getMessage().contains("separator not found") || e.getMessage().contains("file is empty"))) {
+                    log.warn("Skipping invalid file ({}): {}", e.getMessage(), filename);
+                    metrics.recordFileInvalid();
+                    return;
+                }
+                throw e;
+            }
+            metrics.recordParse(System.nanoTime() - parseStart);
 
             if (ride.getRidePoints().isEmpty()) {
                 log.warn("Ride has 0 points (skipping): {}", filename);
+                metrics.recordFileSkipped();
                 return;
             }
 
+            if (!isRideInGermany(ride)) {
+                log.warn("Ride contains points outside Germany (skipping): {}", filename);
+                metrics.recordFileSkipped();
+                return;
+            }
+
+            // DB Save
+            long dbStart = System.nanoTime();
             Ride savedRide = rideRepository.save(ride);
-            mapMatchingService.mapMatch(savedRide);
+            metrics.recordDbSave(System.nanoTime() - dbStart);
+
+            // Map Match
+            long mapMatchStart = System.nanoTime();
+            boolean mapMatchSuccess = mapMatchingService.mapMatch(savedRide);
+            metrics.recordMapMatch(System.nanoTime() - mapMatchStart, mapMatchSuccess);
+
+            metrics.recordFileProcessed();
 
         } catch (IOException e) {
             throw new RuntimeException("Error reading file " + filename, e);
+        }
+    }
+
+    private boolean isRideInGermany(Ride ride) {
+        if (ride.getRidePoints() == null || ride.getRidePoints().isEmpty()) {
+            return false;
+        }
+
+        // Approximate Bounding Box for Germany
+        final double MIN_LAT = 47.2;
+        final double MAX_LAT = 55.1;
+        final double MIN_LON = 5.8;
+        final double MAX_LON = 15.1;
+
+        for (var point : ride.getRidePoints()) {
+            if (point.getLocation() != null) {
+                // JTS Point: X - Longitude, Y - Latitude
+                double lon = point.getLocation().getX();
+                double lat = point.getLocation().getY();
+
+                if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
+                    return false; // Found a point outside Germany
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Analyzes a single ride file for map matching issues.
+     * Usage: ./gradlew bootRun --args="--analyze=/path/to/VM2_-64940635"
+     */
+    private void runAnalysis(Path path) {
+        log.info("Running ride analysis for: {}", path);
+
+        if (!Files.exists(path)) {
+            log.error("File not found: {}", path);
+            return;
+        }
+
+        try (FileInputStream fis = new FileInputStream(path.toFile())) {
+            String filename = path.getFileName().toString();
+            Ride ride = parser.parse(fis, filename);
+
+            RideAnalyzer.AnalysisResult result = RideAnalyzer.analyze(ride, filename);
+            RideAnalyzer.printReport(result);
+
+        } catch (IOException e) {
+            log.error("Failed to analyze file: {}", path, e);
+        }
+    }
+
+    /**
+     * Analyzes a single ride file and outputs GeoJSON for visualization.
+     * Usage: ./gradlew bootRun --args="--analyze-geojson=/path/to/VM2_-64940635"
+     * Paste the output into https://geojson.io to visualize
+     */
+    private void runAnalysisWithGeoJson(Path path) {
+        log.info("Running ride analysis with GeoJSON for: {}", path);
+
+        if (!Files.exists(path)) {
+            log.error("File not found: {}", path);
+            return;
+        }
+
+        try (FileInputStream fis = new FileInputStream(path.toFile())) {
+            String filename = path.getFileName().toString();
+            Ride ride = parser.parse(fis, filename);
+
+            RideAnalyzer.AnalysisResult result = RideAnalyzer.analyze(ride, filename);
+            RideAnalyzer.printReport(result);
+
+            System.out.println("\n--- GeoJSON (paste into https://geojson.io) ---\n");
+            System.out.println(RideAnalyzer.toGeoJson(ride));
+
+        } catch (IOException e) {
+            log.error("Failed to analyze file: {}", path, e);
         }
     }
 }

@@ -46,4 +46,8 @@ public class Ride {
     @Column(columnDefinition = "geometry(LineString,4326)")
     private LineString trajectory;
 
+    @ElementCollection
+    @CollectionTable(name = "ride_edges", joinColumns = @JoinColumn(name = "ride_id"))
+    @Column(name = "edge_id")
+    private List<Long> traversedEdgeIds = new ArrayList<>();
 }

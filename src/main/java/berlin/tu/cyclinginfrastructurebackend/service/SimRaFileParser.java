@@ -7,12 +7,16 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.IncidentType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ParticipantType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
-import de.siegmar.fastcsv.reader.CsvRecord;
-import de.siegmar.fastcsv.reader.CsvReader;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.IncidentCsvBean;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.RidePointCsvBean;
+import com.opencsv.bean.CsvToBeanBuilder;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.stereotype.Service;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -27,77 +31,204 @@ import java.util.Set;
 @Service
 public class SimRaFileParser {
 
+    private static final Logger log = LoggerFactory.getLogger(SimRaFileParser.class);
+
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public Ride parse(InputStream inputStream, String filename) throws IOException {
         Ride ride = new Ride();
         ride.setOriginalFilename(filename);
 
+        List<String> lines = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                lines.add(line);
+            }
+        }
 
-            // FastCSV reader
-            CsvReader<CsvRecord> csvReader = CsvReader.builder().ofCsvRecord(br);
+        if (lines.isEmpty()) {
+            throw new IOException("Invalid file format: file is empty");
+        }
 
-            boolean processingIncidents = true;
-            boolean incidentHeaderFound = false;
-            boolean pointHeaderFound = false;
+        int separatorIndex = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains("======")) {
+                separatorIndex = i;
+                break;
+            }
+        }
 
-            List<RidePoint> points = new ArrayList<>();
-            int sequence = 0;
+        if (separatorIndex == -1) {
+            throw new IOException("Invalid file format: separator not found");
+        }
 
-            for (CsvRecord record : csvReader) {
-                // Check for empty lines or single column weirdness
-                if (record.getFieldCount() == 0) continue;
-                String firstField = record.getField(0);
+        // Section 1: Incidents
+        List<String> incidentLines = lines.subList(0, separatorIndex);
+        parseIncidents(ride, incidentLines);
 
-                if (firstField.trim().isEmpty() && record.getFieldCount() == 1) continue;
+        // Section 2: Ride Points
+        List<String> rideLines = lines.subList(separatorIndex + 1, lines.size());
+        parseRidePoints(ride, rideLines);
 
-                // Check for section separator
-                if (firstField.startsWith("======")) {
-                    processingIncidents = false;
-                    continue;
+        return ride;
+    }
+
+    private <T> List<T> parseCsv(String content, Class<T> type) {
+        if (content == null || content.trim().isEmpty()) return new ArrayList<>();
+
+        String sanitized = sanitizeCsv(content);
+
+        try {
+            return new CsvToBeanBuilder<T>(new java.io.StringReader(sanitized))
+                    .withType(type)
+                    .withIgnoreLeadingWhiteSpace(true)
+                    .withIgnoreEmptyLine(true)
+                    .withThrowExceptions(false)
+                    .build()
+                    .parse();
+        } catch (RuntimeException e) {
+            log.error("CSV Parsing failed for type {}: {}", type.getSimpleName(), e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private void parseIncidents(Ride ride, List<String> lines) {
+        String csvContent = extractCsvSection(lines, "key,");
+        if (csvContent.isEmpty()) return;
+
+        List<IncidentCsvBean> beans = parseCsv(csvContent, IncidentCsvBean.class);
+
+        List<Incident> incidents = new ArrayList<>();
+        for (IncidentCsvBean bean : beans) {
+           Incident incident = mapToIncident(bean, ride);
+           if (incident != null) {
+               incidents.add(incident);
+           }
+
+           // Extract ride metadata from the first valid incident row (often row 0 has metadata)
+           if (bean.getBike() != null && ride.getBikeType() == null) {
+               ride.setBikeType(BikeType.fromCode(bean.getBike()));
+               ride.setChildTransport(Boolean.TRUE.equals(bean.getChildCheckBox()));
+               ride.setTrailerAttached(Boolean.TRUE.equals(bean.getTrailerCheckBox()));
+               if (bean.getPLoc() != null) {
+                   ride.setPhoneLocation(PhoneLocation.fromCode(bean.getPLoc()));
+               }
+           }
+        }
+        ride.setIncidents(incidents);
+    }
+
+    private void parseRidePoints(Ride ride, List<String> lines) {
+        String csvContent = extractCsvSection(lines, "lat,");
+        if (csvContent.isEmpty()) return;
+
+        List<RidePointCsvBean> beans = parseCsv(csvContent, RidePointCsvBean.class);
+
+        List<RidePoint> points = new ArrayList<>();
+        int sequence = 0;
+        for (RidePointCsvBean bean : beans) {
+            RidePoint point = mapToRidePoint(bean, sequence++, ride);
+            points.add(point);
+        }
+        ride.setRidePoints(points);
+        addPointsToRide(ride, points);
+    }
+
+    private String extractCsvSection(List<String> lines, String headerMarker) {
+        StringBuilder csvContent = new StringBuilder();
+        boolean headerFound = false;
+        for (String line : lines) {
+            if (line.trim().isEmpty()) continue;
+            if (!headerFound) {
+                if (line.startsWith(headerMarker)) {
+                    headerFound = true;
+                    csvContent.append(line).append("\n");
                 }
+            } else {
+                csvContent.append(line).append("\n");
+            }
+        }
+        return csvContent.toString();
+    }
 
-                // Check for file version header (e.g., 58#2)
-                if (record.getFieldCount() == 1 && firstField.contains("#")) {
-                    continue;
-                }
+    private String sanitizeCsv(String content) {
+        String[] lines = content.split("\n");
+        if (lines.length == 0) return content;
 
-                if (processingIncidents) {
-                    // Detect Incident Header
-                    if (!incidentHeaderFound) {
-                        if ("key".equals(firstField)) {
-                            incidentHeaderFound = true;
-                        }
-                        continue;
-                    }
+        int expectedCols = lines[0].split(",", -1).length;
 
-                    // Parse Incident Row
-                    parseIncidentRow(ride, record);
+        StringBuilder sanitized = new StringBuilder();
+        for (String line : lines) {
+            if (line.trim().isEmpty()) continue;
 
-                } else {
-                    // Detect Point Header
-                    if (!pointHeaderFound) {
-                        if (record.getFieldCount() > 1 && "lat".equals(firstField) && "lon".equals(record.getField(1))) {
-                            pointHeaderFound = true;
-                        }
-                        continue;
-                    }
+            String[] fields = line.split(",", -1);
+            int currentCols = fields.length;
 
-                    // Parse Point Row
-                    RidePoint point = parseRidePointRow(record, sequence++);
-                    if (point != null) {
-                        point.setRide(ride);
-                        points.add(point);
-                    }
-                }
+            sanitized.append(line);
+
+            if (currentCols < expectedCols) {
+                int missing = expectedCols - currentCols;
+                sanitized.append(",".repeat(missing));
             }
 
-            ride.setRidePoints(points);
-            addPointsToRide(ride, points);
-
-            return ride;
+            sanitized.append("\n");
         }
+        return sanitized.toString();
+    }
+
+    private Incident mapToIncident(IncidentCsvBean bean, Ride ride) {
+        if (bean.getIncident() == null) return null;
+        // -5 is often used as a dummy or 'nothing' placeholder in SimRa
+        if (bean.getIncident() == -5) return null;
+
+        Incident incident = new Incident();
+        incident.setRide(ride);
+        incident.setIncidentKey(bean.getKey());
+
+        if (bean.getLat() != null && bean.getLon() != null) {
+            incident.setLocation(geometryFactory.createPoint(new Coordinate(bean.getLon(), bean.getLat())));
+        }
+        incident.setTimestamp(bean.getTs());
+        incident.setIncidentType(IncidentType.fromCode(bean.getIncident()));
+        incident.setScary(Boolean.TRUE.equals(bean.getScary()));
+        incident.setDescription(bean.getDesc());
+
+        Set<ParticipantType> participants = new HashSet<>();
+        if (Boolean.TRUE.equals(bean.getI1())) participants.add(ParticipantType.BUS);
+        if (Boolean.TRUE.equals(bean.getI2())) participants.add(ParticipantType.CYCLIST);
+        if (Boolean.TRUE.equals(bean.getI3())) participants.add(ParticipantType.PEDESTRIAN);
+        if (Boolean.TRUE.equals(bean.getI4())) participants.add(ParticipantType.DELIVERY_VAN);
+        if (Boolean.TRUE.equals(bean.getI5())) participants.add(ParticipantType.TRUCK);
+        if (Boolean.TRUE.equals(bean.getI6())) participants.add(ParticipantType.MOTORCYCLE);
+        if (Boolean.TRUE.equals(bean.getI7())) participants.add(ParticipantType.CAR);
+        if (Boolean.TRUE.equals(bean.getI8())) participants.add(ParticipantType.TAXI);
+        if (Boolean.TRUE.equals(bean.getI9())) participants.add(ParticipantType.OTHER);
+        if (Boolean.TRUE.equals(bean.getI10())) participants.add(ParticipantType.SCOOTER);
+
+        incident.setInvolvedParticipants(participants);
+        return incident;
+    }
+
+    private RidePoint mapToRidePoint(RidePointCsvBean bean, int sequence, Ride ride) {
+        RidePoint point = new RidePoint();
+        point.setRide(ride);
+        point.setSequenceIndex(sequence);
+        point.setTimestamp(bean.getTimeStamp());
+
+        if (bean.getLat() != null && bean.getLon() != null) {
+            point.setLocation(geometryFactory.createPoint(new Coordinate(bean.getLon(), bean.getLat())));
+        }
+
+        point.setX(bean.getX());
+        point.setY(bean.getY());
+        point.setZ(bean.getZ());
+        point.setGpsAccuracy(bean.getAcc());
+        point.setA(bean.getA());
+        point.setB(bean.getB());
+        point.setC(bean.getC());
+
+        return point;
     }
 
     private void addPointsToRide(Ride ride, List<RidePoint> points) {
@@ -113,118 +244,6 @@ public class SimRaFileParser {
             if (coordinates.length >= 2) {
                 ride.setTrajectory(geometryFactory.createLineString(coordinates));
             }
-        }
-    }
-
-    private void parseIncidentRow(Ride ride, CsvRecord record) {
-        if (record.getFieldCount() < 9) return;
-
-        try {
-            if (ride.getBikeType() == null) {
-                String bikeStr = record.getField(4);
-                if (!bikeStr.isEmpty()) ride.setBikeType(BikeType.fromCode(Integer.parseInt(bikeStr)));
-                ride.setChildTransport("1".equals(record.getField(5)));
-                ride.setTrailerAttached("1".equals(record.getField(6)));
-                String pLocStr = record.getField(7);
-                if (!pLocStr.isEmpty()) ride.setPhoneLocation(PhoneLocation.fromCode(Integer.parseInt(pLocStr)));
-            }
-
-            String incTypeStr = record.getField(8);
-            if (incTypeStr.isEmpty()) return;
-
-            int incidentTypeCode = Integer.parseInt(incTypeStr);
-            // Skip dummy incidents
-            if (incidentTypeCode == -5) return;
-
-            Incident incident = new Incident();
-            incident.setRide(ride);
-            incident.setIncidentKey(Integer.parseInt(record.getField(0)));
-
-            String latStr = record.getField(1);
-            String lonStr = record.getField(2);
-            if (!latStr.isEmpty() && !lonStr.isEmpty()) {
-                incident.setLocation(geometryFactory.createPoint(new Coordinate(
-                        Double.parseDouble(lonStr), Double.parseDouble(latStr))));
-            }
-
-            String tsStr = record.getField(3);
-            if (!tsStr.isEmpty()) incident.setTimestamp(Long.parseLong(tsStr));
-            incident.setIncidentType(IncidentType.fromCode(incidentTypeCode));
-
-            // Participants logic
-            Set<ParticipantType> participants = new HashSet<>();
-            checkParticipant(participants, record, 9, ParticipantType.BUS);
-            checkParticipant(participants, record, 10, ParticipantType.CYCLIST);
-            checkParticipant(participants, record, 11, ParticipantType.PEDESTRIAN);
-            checkParticipant(participants, record, 12, ParticipantType.DELIVERY_VAN);
-            checkParticipant(participants, record, 13, ParticipantType.TRUCK);
-            checkParticipant(participants, record, 14, ParticipantType.MOTORCYCLE);
-            checkParticipant(participants, record, 15, ParticipantType.CAR);
-            checkParticipant(participants, record, 16, ParticipantType.TAXI);
-            checkParticipant(participants, record, 17, ParticipantType.OTHER);
-            checkParticipant(participants, record, 20, ParticipantType.SCOOTER);
-
-            incident.setInvolvedParticipants(participants);
-
-            if (record.getFieldCount() > 18) incident.setScary("1".equals(record.getField(18)));
-            if (record.getFieldCount() > 19) incident.setDescription(record.getField(19));
-
-            ride.getIncidents().add(incident);
-        } catch (NumberFormatException ignored) { }
-    }
-
-    private void checkParticipant(Set<ParticipantType> participants, CsvRecord record, int index, ParticipantType type) {
-        if (record.getFieldCount() > index && "1".equals(record.getField(index))) {
-            participants.add(type);
-        }
-    }
-
-    private RidePoint parseRidePointRow(CsvRecord record, int sequence) {
-        if (record.getFieldCount() < 6) return null;
-
-        RidePoint point = new RidePoint();
-        point.setSequenceIndex(sequence);
-
-        try {
-            String latStr = record.getField(0);
-            String lonStr = record.getField(1);
-
-            if (!latStr.isEmpty() && !lonStr.isEmpty()) {
-                point.setLocation(geometryFactory.createPoint(new Coordinate(
-                        Double.parseDouble(lonStr), Double.parseDouble(latStr))));
-            }
-
-            String xStr = record.getField(2);
-            if (!xStr.isEmpty()) point.setX(Double.parseDouble(xStr));
-
-            String yStr = record.getField(3);
-            if (!yStr.isEmpty()) point.setY(Double.parseDouble(yStr));
-
-            String zStr = record.getField(4);
-            if (!zStr.isEmpty()) point.setZ(Double.parseDouble(zStr));
-
-            String tsStr = record.getField(5);
-            if (!tsStr.isEmpty()) point.setTimestamp(Long.parseLong(tsStr));
-
-            if (record.getFieldCount() > 6) {
-                String accStr = record.getField(6);
-                if (!accStr.isEmpty()) point.setGpsAccuracy(Double.parseDouble(accStr));
-            }
-
-            if (record.getFieldCount() > 9) {
-                String aStr = record.getField(7);
-                if (!aStr.isEmpty()) point.setA(Double.parseDouble(aStr));
-
-                String bStr = record.getField(8);
-                if (!bStr.isEmpty()) point.setB(Double.parseDouble(bStr));
-
-                String cStr = record.getField(9);
-                if (!cStr.isEmpty()) point.setC(Double.parseDouble(cStr));
-            }
-
-            return point;
-        } catch (NumberFormatException e) {
-            return null;
         }
     }
 }
