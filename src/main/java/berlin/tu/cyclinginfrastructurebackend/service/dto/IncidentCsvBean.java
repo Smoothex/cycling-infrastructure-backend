@@ -5,67 +5,67 @@ import lombok.Data;
 
 @Data
 public class IncidentCsvBean {
-    @CsvBindByName(column = "key", required = false)
+    @CsvBindByName(column = "key")
     private Integer key;
 
-    @CsvBindByName(column = "lat", required = false)
+    @CsvBindByName(column = "lat")
     private Double lat;
 
-    @CsvBindByName(column = "lon", required = false)
+    @CsvBindByName(column = "lon")
     private Double lon;
 
-    @CsvBindByName(column = "ts", required = false)
+    @CsvBindByName(column = "ts")
     private Long ts;
 
-    @CsvBindByName(column = "bike", required = false)
+    @CsvBindByName(column = "bike")
     private Integer bike;
 
-    @CsvBindByName(column = "childCheckBox", required = false)
+    @CsvBindByName(column = "childCheckBox")
     private Boolean childCheckBox;
 
-    @CsvBindByName(column = "trailerCheckBox", required = false)
+    @CsvBindByName(column = "trailerCheckBox")
     private Boolean trailerCheckBox;
 
-    @CsvBindByName(column = "pLoc", required = false)
+    @CsvBindByName(column = "pLoc")
     private Integer pLoc;
 
-    @CsvBindByName(column = "incident", required = false)
+    @CsvBindByName(column = "incident")
     private Integer incident;
 
-    @CsvBindByName(column = "i1", required = false)
+    @CsvBindByName(column = "i1")
     private Boolean i1;
 
-    @CsvBindByName(column = "i2", required = false)
+    @CsvBindByName(column = "i2")
     private Boolean i2;
 
-    @CsvBindByName(column = "i3", required = false)
+    @CsvBindByName(column = "i3")
     private Boolean i3;
 
-    @CsvBindByName(column = "i4", required = false)
+    @CsvBindByName(column = "i4")
     private Boolean i4;
 
-    @CsvBindByName(column = "i5", required = false)
+    @CsvBindByName(column = "i5")
     private Boolean i5;
 
-    @CsvBindByName(column = "i6", required = false)
+    @CsvBindByName(column = "i6")
     private Boolean i6;
 
-    @CsvBindByName(column = "i7", required = false)
+    @CsvBindByName(column = "i7")
     private Boolean i7;
 
-    @CsvBindByName(column = "i8", required = false)
+    @CsvBindByName(column = "i8")
     private Boolean i8;
 
-    @CsvBindByName(column = "i9", required = false)
+    @CsvBindByName(column = "i9")
     private Boolean i9;
 
-    @CsvBindByName(column = "scary", required = false)
+    @CsvBindByName(column = "scary")
     private Boolean scary;
 
-    @CsvBindByName(column = "desc", required = false)
+    @CsvBindByName(column = "desc")
     private String desc;
 
-    @CsvBindByName(column = "i10", required = false)
+    @CsvBindByName(column = "i10")
     private Boolean i10;
 }
 
