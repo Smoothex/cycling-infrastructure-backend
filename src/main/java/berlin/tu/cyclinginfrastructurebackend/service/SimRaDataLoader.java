@@ -3,7 +3,6 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import berlin.tu.cyclinginfrastructurebackend.util.ImportMetrics;
-import berlin.tu.cyclinginfrastructurebackend.util.RideAnalyzer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,8 +31,6 @@ public class SimRaDataLoader implements CommandLineRunner {
     @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
     private String dataPath;
 
-    private final int threadCount = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
-    private final ForkJoinPool customThreadPool = new ForkJoinPool(threadCount);
 
     public SimRaDataLoader(RideRepository rideRepository, SimRaFileParser parser,
                            GraphHopperMapMatchingService mapMatchingService) {
@@ -78,26 +75,25 @@ public class SimRaDataLoader implements CommandLineRunner {
         ImportMetrics metrics = new ImportMetrics();
         int total = filesToProcess.size();
 
-        // Submit to custom pool instead of common pool
-        try {
+        int threadCount = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+
+        try (ForkJoinPool customThreadPool = new ForkJoinPool(threadCount)) {
             customThreadPool.submit(() ->
-                filesToProcess.parallelStream().forEach(path -> {
-                    try {
-                        processFile(path, metrics);
-                        int current = metrics.getFilesProcessed();
-                        if (current % 500 == 0) {
-                            log.info("Imported {}/{} rides...", current, total);
+                    filesToProcess.parallelStream().forEach(path -> {
+                        try {
+                            processFile(path, metrics);
+                            int current = metrics.getFilesProcessed();
+                            if (current % 500 == 0) {
+                                log.info("Imported {}/{} rides...", current, total);
+                            }
+                        } catch (Exception e) {
+                            metrics.recordFileFailed();
+                            log.error("Failed to process file: {}", path.getFileName(), e);
                         }
-                    } catch (Exception e) {
-                        metrics.recordFileFailed();
-                        log.error("Failed to process file: " + path.getFileName(), e);
-                    }
-                })
-            ).get(); // Wait for completion
+                    })
+            ).get();
         } catch (Exception e) {
             log.error("Error during import execution", e);
-        } finally {
-            customThreadPool.shutdown();
         }
 
         metrics.finish();
@@ -176,57 +172,5 @@ public class SimRaDataLoader implements CommandLineRunner {
             }
         }
         return true;
-    }
-
-    /**
-     * Analyzes a single ride file for map matching issues.
-     * Usage: ./gradlew bootRun --args="--analyze=/path/to/VM2_-64940635"
-     */
-    private void runAnalysis(Path path) {
-        log.info("Running ride analysis for: {}", path);
-
-        if (!Files.exists(path)) {
-            log.error("File not found: {}", path);
-            return;
-        }
-
-        try (FileInputStream fis = new FileInputStream(path.toFile())) {
-            String filename = path.getFileName().toString();
-            Ride ride = parser.parse(fis, filename);
-
-            RideAnalyzer.AnalysisResult result = RideAnalyzer.analyze(ride, filename);
-            RideAnalyzer.printReport(result);
-
-        } catch (IOException e) {
-            log.error("Failed to analyze file: {}", path, e);
-        }
-    }
-
-    /**
-     * Analyzes a single ride file and outputs GeoJSON for visualization.
-     * Usage: ./gradlew bootRun --args="--analyze-geojson=/path/to/VM2_-64940635"
-     * Paste the output into https://geojson.io to visualize
-     */
-    private void runAnalysisWithGeoJson(Path path) {
-        log.info("Running ride analysis with GeoJSON for: {}", path);
-
-        if (!Files.exists(path)) {
-            log.error("File not found: {}", path);
-            return;
-        }
-
-        try (FileInputStream fis = new FileInputStream(path.toFile())) {
-            String filename = path.getFileName().toString();
-            Ride ride = parser.parse(fis, filename);
-
-            RideAnalyzer.AnalysisResult result = RideAnalyzer.analyze(ride, filename);
-            RideAnalyzer.printReport(result);
-
-            System.out.println("\n--- GeoJSON (paste into https://geojson.io) ---\n");
-            System.out.println(RideAnalyzer.toGeoJson(ride));
-
-        } catch (IOException e) {
-            log.error("Failed to analyze file: {}", path, e);
-        }
     }
 }

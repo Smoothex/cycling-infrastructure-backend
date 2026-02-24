@@ -10,6 +10,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.IncidentCsvBean;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.RidePointCsvBean;
 import com.opencsv.bean.CsvToBeanBuilder;
+import org.jspecify.annotations.NonNull;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
@@ -39,65 +40,40 @@ public class SimRaFileParser {
         Ride ride = new Ride();
         ride.setOriginalFilename(filename);
 
-        List<String> lines = new ArrayList<>();
+        List<String> incidentLines = new ArrayList<>();
+        List<String> rideLines = new ArrayList<>();
+        boolean separatorFound = false;
+
         try (BufferedReader br = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
             while ((line = br.readLine()) != null) {
-                lines.add(line);
+                if (line.contains("======")) {
+                    separatorFound = true;
+                    continue; // Skip the separator itself
+                }
+
+                if (line.trim().isEmpty()) continue;
+
+                if (!separatorFound) {
+                    incidentLines.add(line);
+                } else {
+                    rideLines.add(line);
+                }
             }
         }
 
-        if (lines.isEmpty()) {
-            throw new IOException("Invalid file format: file is empty");
+        if (incidentLines.isEmpty() && rideLines.isEmpty()) {
+            throw new IOException("Invalid file format: file is empty or contains no data");
         }
 
-        int separatorIndex = -1;
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).contains("======")) {
-                separatorIndex = i;
-                break;
-            }
-        }
-
-        if (separatorIndex == -1) {
-            throw new IOException("Invalid file format: separator not found");
-        }
-
-        // Section 1: Incidents
-        List<String> incidentLines = lines.subList(0, separatorIndex);
         parseIncidents(ride, incidentLines);
-
-        // Section 2: Ride Points
-        List<String> rideLines = lines.subList(separatorIndex + 1, lines.size());
         parseRidePoints(ride, rideLines);
 
         return ride;
     }
 
-    private <T> List<T> parseCsv(String content, Class<T> type) {
-        if (content == null || content.trim().isEmpty()) return new ArrayList<>();
-
-        String sanitized = sanitizeCsv(content);
-
-        try {
-            return new CsvToBeanBuilder<T>(new java.io.StringReader(sanitized))
-                    .withType(type)
-                    .withIgnoreLeadingWhiteSpace(true)
-                    .withIgnoreEmptyLine(true)
-                    .withThrowExceptions(false)
-                    .build()
-                    .parse();
-        } catch (RuntimeException e) {
-            log.error("CSV Parsing failed for type {}: {}", type.getSimpleName(), e.getMessage());
-            return new ArrayList<>();
-        }
-    }
-
     private void parseIncidents(Ride ride, List<String> lines) {
-        String csvContent = extractCsvSection(lines, "key,");
-        if (csvContent.isEmpty()) return;
-
-        List<IncidentCsvBean> beans = parseCsv(csvContent, IncidentCsvBean.class);
+        List<IncidentCsvBean> beans = mapLinesToBeans(lines, "key,", IncidentCsvBean.class);
 
         List<Incident> incidents = new ArrayList<>();
         for (IncidentCsvBean bean : beans) {
@@ -120,10 +96,7 @@ public class SimRaFileParser {
     }
 
     private void parseRidePoints(Ride ride, List<String> lines) {
-        String csvContent = extractCsvSection(lines, "lat,");
-        if (csvContent.isEmpty()) return;
-
-        List<RidePointCsvBean> beans = parseCsv(csvContent, RidePointCsvBean.class);
+        List<RidePointCsvBean> beans = mapLinesToBeans(lines, "lat,", RidePointCsvBean.class);
 
         List<RidePoint> points = new ArrayList<>();
         int sequence = 0;
@@ -135,46 +108,63 @@ public class SimRaFileParser {
         addPointsToRide(ride, points);
     }
 
-    private String extractCsvSection(List<String> lines, String headerMarker) {
-        StringBuilder csvContent = new StringBuilder();
-        boolean headerFound = false;
-        for (String line : lines) {
-            if (line.trim().isEmpty()) continue;
-            if (!headerFound) {
-                if (line.startsWith(headerMarker)) {
-                    headerFound = true;
-                    csvContent.append(line).append("\n");
-                }
-            } else {
-                csvContent.append(line).append("\n");
+    private <T> List<T> mapLinesToBeans(List<String> lines, String headerMarker, Class<T> type) {
+        if (lines == null || lines.isEmpty()) return new ArrayList<>();
+
+        int headerIndex = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).startsWith(headerMarker)) {
+                headerIndex = i;
+                break;
             }
         }
-        return csvContent.toString();
+
+        if (headerIndex == -1) {
+            return new ArrayList<>(); // Header not found in this section
+        }
+
+        StringBuilder cleanCsvBuffer = sanitizeCsv(lines, headerIndex);
+
+        try {
+            return new CsvToBeanBuilder<T>(new java.io.StringReader(cleanCsvBuffer.toString()))
+                    .withType(type)
+                    .withIgnoreLeadingWhiteSpace(true)
+                    .withIgnoreEmptyLine(true)
+                    .withThrowExceptions(false)
+                    .build()
+                    .parse();
+        } catch (RuntimeException e) {
+            log.error("CSV Parsing failed for type {}: {}", type.getSimpleName(), e.getMessage());
+            return new ArrayList<>();
+        }
     }
 
-    private String sanitizeCsv(String content) {
-        String[] lines = content.split("\n");
-        if (lines.length == 0) return content;
+    private static @NonNull StringBuilder sanitizeCsv(List<String> lines, int headerIndex) {
+        String header = lines.get(headerIndex);
+        int expectedCols = countCommas(header) + 1;
 
-        int expectedCols = lines[0].split(",", -1).length;
+        StringBuilder cleanCsvBuffer = new StringBuilder();
+        for (int i = headerIndex; i < lines.size(); i++) {
+            String line = lines.get(i);
+            int currentCols = countCommas(line) + 1;
 
-        StringBuilder sanitized = new StringBuilder();
-        for (String line : lines) {
-            if (line.trim().isEmpty()) continue;
-
-            String[] fields = line.split(",", -1);
-            int currentCols = fields.length;
-
-            sanitized.append(line);
-
+            cleanCsvBuffer.append(line);
             if (currentCols < expectedCols) {
-                int missing = expectedCols - currentCols;
-                sanitized.append(",".repeat(missing));
+                cleanCsvBuffer.append(",".repeat(expectedCols - currentCols));  // padding
             }
-
-            sanitized.append("\n");
+            cleanCsvBuffer.append("\n");
         }
-        return sanitized.toString();
+        return cleanCsvBuffer;
+    }
+
+    private static int countCommas(String str) {
+        int count = 0;
+        for (int i = 0; i < str.length(); i++) {
+            if (str.charAt(i) == ',') {
+                count++;
+            }
+        }
+        return count;
     }
 
     private Incident mapToIncident(IncidentCsvBean bean, Ride ride) {
