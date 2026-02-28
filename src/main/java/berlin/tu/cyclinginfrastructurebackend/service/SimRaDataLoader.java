@@ -26,17 +26,17 @@ public class SimRaDataLoader implements CommandLineRunner {
 
     private final RideRepository rideRepository;
     private final SimRaFileParser parser;
-    private final GraphHopperMapMatchingService mapMatchingService;
+    private final RideProcessingService rideProcessingService;
 
     @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
     private String dataPath;
 
-
-    public SimRaDataLoader(RideRepository rideRepository, SimRaFileParser parser,
-                           GraphHopperMapMatchingService mapMatchingService) {
+    public SimRaDataLoader(RideRepository rideRepository,
+                           SimRaFileParser parser,
+                           RideProcessingService rideProcessingService) {
         this.rideRepository = rideRepository;
         this.parser = parser;
-        this.mapMatchingService = mapMatchingService;
+        this.rideProcessingService = rideProcessingService;
     }
 
     @Override
@@ -55,11 +55,11 @@ public class SimRaDataLoader implements CommandLineRunner {
         List<Path> filesToProcess;
         try (Stream<Path> stream = Files.walk(startPath)) {
             filesToProcess = stream.filter(Files::isRegularFile)
-                .filter(path -> !path.getFileName().toString().startsWith("."))
-                .filter(path -> path.toString().contains("Rides"))
-                .filter(path -> path.getFileName().toString().startsWith("VM"))
-                .filter(path -> !existingFiles.contains(path.getFileName().toString()))
-                .toList();
+                    .filter(path -> !path.getFileName().toString().startsWith("."))
+                    .filter(path -> path.toString().contains("Rides"))
+                    .filter(path -> path.getFileName().toString().startsWith("VM"))
+                    .filter(path -> !existingFiles.contains(path.getFileName().toString()))
+                    .toList();
         } catch (IOException e) {
             log.error("Error walking file tree", e);
             return;
@@ -83,7 +83,7 @@ public class SimRaDataLoader implements CommandLineRunner {
                         try {
                             processFile(path, metrics);
                             int current = metrics.getFilesProcessed();
-                            if (current % 500 == 0) {
+                            if (current % 100 == 0) {
                                 log.info("Imported {}/{} rides...", current, total);
                             }
                         } catch (Exception e) {
@@ -98,18 +98,16 @@ public class SimRaDataLoader implements CommandLineRunner {
 
         metrics.finish();
         metrics.printSummary();
-
-        log.info("SimRa data import completed.");
     }
 
     private void processFile(Path path, ImportMetrics metrics) {
         String filename = path.getFileName().toString();
         try (FileInputStream fis = new FileInputStream(path.toFile())) {
-            // Parse
+            // 1. Parse
             long parseStart = System.nanoTime();
             Ride ride;
             try {
-                 ride = parser.parse(fis, filename);
+                ride = parser.parse(fis, filename);
             } catch (IOException e) {
                 if (e.getMessage() != null && (e.getMessage().contains("separator not found") || e.getMessage().contains("file is empty"))) {
                     log.warn("Skipping invalid file ({}): {}", e.getMessage(), filename);
@@ -132,17 +130,16 @@ public class SimRaDataLoader implements CommandLineRunner {
                 return;
             }
 
-            // DB Save
-            long dbStart = System.nanoTime();
-            Ride savedRide = rideRepository.save(ride);
-            metrics.recordDbSave(System.nanoTime() - dbStart);
+            // 2. Map Match & Persist
+            long processingStart = System.nanoTime();
+            boolean success = rideProcessingService.processRide(ride);
+            metrics.recordMapMatch(System.nanoTime() - processingStart, success);
 
-            // Map Match
-            long mapMatchStart = System.nanoTime();
-            boolean mapMatchSuccess = mapMatchingService.mapMatch(savedRide);
-            metrics.recordMapMatch(System.nanoTime() - mapMatchStart, mapMatchSuccess);
-
-            metrics.recordFileProcessed();
+            if (success) {
+                metrics.recordFileProcessed();
+            } else {
+                metrics.recordFileFailed();
+            }
 
         } catch (IOException e) {
             throw new RuntimeException("Error reading file " + filename, e);
@@ -150,27 +147,18 @@ public class SimRaDataLoader implements CommandLineRunner {
     }
 
     private boolean isRideInGermany(Ride ride) {
-        if (ride.getRidePoints() == null || ride.getRidePoints().isEmpty()) {
-            return false;
-        }
-
         // Approximate Bounding Box for Germany
         final double MIN_LAT = 47.2;
         final double MAX_LAT = 55.1;
         final double MIN_LON = 5.8;
         final double MAX_LON = 15.1;
 
-        for (var point : ride.getRidePoints()) {
-            if (point.getLocation() != null) {
-                // JTS Point: X - Longitude, Y - Latitude
-                double lon = point.getLocation().getX();
-                double lat = point.getLocation().getY();
-
-                if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
-                    return false; // Found a point outside Germany
-                }
-            }
-        }
-        return true;
+        return ride.getRidePoints().stream()
+                .filter(p -> p.getLocation() != null)
+                .allMatch(p -> {
+                    double lon = p.getLocation().getX();
+                    double lat = p.getLocation().getY();
+                    return lat >= MIN_LAT && lat <= MAX_LAT && lon >= MIN_LON && lon <= MAX_LON;
+                });
     }
 }
