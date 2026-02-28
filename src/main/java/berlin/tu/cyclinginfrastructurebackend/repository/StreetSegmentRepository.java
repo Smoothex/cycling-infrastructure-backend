@@ -14,4 +14,12 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     @Transactional
     @Query("UPDATE StreetSegment s SET s.usageCount = s.usageCount + 1 WHERE s.id = :id")
     int incrementUsage(Long id);
+
+    @Modifying
+    @Query(value = """
+        INSERT INTO street_segments (id, street_name, geometry, usage_count, avoidance_count)
+        VALUES (:id, :name, CAST(:geom AS geometry), 1, 0)
+        ON CONFLICT (id) DO UPDATE SET usage_count = street_segments.usage_count + 1
+        """, nativeQuery = true)
+    void upsertSegment(Long id, String name, Object geom);
 }
