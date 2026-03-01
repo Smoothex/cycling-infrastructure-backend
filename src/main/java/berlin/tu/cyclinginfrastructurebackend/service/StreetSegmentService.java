@@ -40,11 +40,7 @@ public class StreetSegmentService {
                 coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
             }
 
-            repository.upsertSegment(edgeId,
-                    name != null ? name : "Unknown",
-                    geometryFactory.createLineString(coords));
-
-            // Increment now that it definitely exists
+            repository.upsertSegment(edgeId, name != null ? name : "Unknown", geometryFactory.createLineString(coords));
             repository.incrementUsage(edgeId);
         }
     }
@@ -82,5 +78,35 @@ public class StreetSegmentService {
             }
         });
         return bestName[0];
+    }
+
+    public void registerAvoidedEdge(Integer edgeId, GraphHopperService hopperService) {
+        int updated = repository.incrementAvoidance(edgeId);
+
+        // If the segment doesn't exist in the database yet, we must fetch its geometry from GraphHopper
+        if (updated == 0) {
+            EdgeIteratorState edge = hopperService.getHopper().getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
+
+            if (edge != null) {
+                String name = edge.getName();
+                if (name == null || name.isBlank()) {
+                    name = findNearestStreetName(edge, hopperService);
+                }
+
+                PointList points = edge.fetchWayGeometry(FetchMode.ALL);
+                Coordinate[] coords = new Coordinate[points.size()];
+                for (int i = 0; i < points.size(); i++) {
+                    coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
+                }
+
+                if (coords.length >= 2) {
+                    repository.upsertSegment((long) edgeId,
+                            name != null ? name : "Unknown",
+                            geometryFactory.createLineString(coords));
+                }
+            }
+            // Increment again now that it exists
+            repository.incrementAvoidance(edgeId);
+        }
     }
 }

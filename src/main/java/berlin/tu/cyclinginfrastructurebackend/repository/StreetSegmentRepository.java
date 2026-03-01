@@ -16,10 +16,15 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     int incrementUsage(Long id);
 
     @Modifying
+    @Transactional
+    @Query("UPDATE StreetSegment s SET s.avoidanceCount = s.avoidanceCount + 1 WHERE s.id = :id")
+    int incrementAvoidance(Integer id);
+
+    @Modifying
     @Query(value = """
         INSERT INTO street_segments (id, street_name, geometry, usage_count, avoidance_count)
-        VALUES (:id, :name, CAST(:geom AS geometry), 1, 0)
-        ON CONFLICT (id) DO UPDATE SET usage_count = street_segments.usage_count + 1
+        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0)
+        ON CONFLICT (id) DO NOTHING -- UPDATE SET usage_count = street_segments.usage_count + 1
         """, nativeQuery = true)
     void upsertSegment(Long id, String name, Object geom);
 }
