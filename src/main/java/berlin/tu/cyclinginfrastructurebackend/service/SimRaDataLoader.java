@@ -26,21 +26,29 @@ public class SimRaDataLoader implements CommandLineRunner {
 
     private final RideRepository rideRepository;
     private final SimRaFileParser parser;
-    private final RideProcessingService rideProcessingService;
+    private final MapMatchingService mapMatchingService;
 
     @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
     private String dataPath;
 
+    @Value("${simra.import.enabled}")
+    private boolean isImportEnabled;
+
     public SimRaDataLoader(RideRepository rideRepository,
                            SimRaFileParser parser,
-                           RideProcessingService rideProcessingService) {
+                           MapMatchingService mapMatchingService) {
         this.rideRepository = rideRepository;
         this.parser = parser;
-        this.rideProcessingService = rideProcessingService;
+        this.mapMatchingService = mapMatchingService;
     }
 
     @Override
     public void run(String... args) {
+        if (!isImportEnabled) {
+            log.info("SimRa data import is DISABLED via properties. Skipping import phase.");
+            return;
+        }
+
         log.info("Starting SimRa data import from: {}", dataPath);
         Path startPath = Paths.get(dataPath);
 
@@ -132,7 +140,7 @@ public class SimRaDataLoader implements CommandLineRunner {
 
             // 2. Map Match & Persist
             long processingStart = System.nanoTime();
-            boolean success = rideProcessingService.processRide(ride);
+            boolean success = mapMatchingService.processRide(ride);
             metrics.recordMapMatch(System.nanoTime() - processingStart, success);
 
             if (success) {

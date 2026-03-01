@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.domain;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -49,5 +50,22 @@ public class Ride {
     @ElementCollection
     @CollectionTable(name = "ride_edges", joinColumns = @JoinColumn(name = "ride_id"))
     @Column(name = "edge_id")
-    private List<Long> traversedEdgeIds = new ArrayList<>();
+    private List<Integer> traversedEdgeIds = new ArrayList<>();
+
+    @Enumerated(EnumType.STRING)
+    private Status status = Status.PENDING;
+
+    private Double actualDistance;
+    private Double shortestPathDistance;
+    private Boolean isDetour;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "ride_avoided_edges", joinColumns = @JoinColumn(name = "ride_id"))
+    @Column(name = "edge_id")
+    private List<Integer> avoidedEdgeIds = new ArrayList<>();
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "ride_chosen_edges", joinColumns = @JoinColumn(name = "ride_id"))
+    @Column(name = "edge_id")
+    private List<Integer> chosenEdgeIds = new ArrayList<>();
 }

@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import com.graphhopper.matching.EdgeMatch;
 import com.graphhopper.matching.MatchResult;
@@ -24,17 +25,17 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
-public class RideProcessingService {
-    private static final Logger log = LoggerFactory.getLogger(RideProcessingService.class);
+public class MapMatchingService {
+    private static final Logger log = LoggerFactory.getLogger(MapMatchingService.class);
 
     private final GraphHopperService hopperService;
     private final StreetSegmentService segmentService;
     private final RideRepository rideRepository;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
-    public RideProcessingService(GraphHopperService hopperService,
-                                 StreetSegmentService segmentService,
-                                 RideRepository rideRepository) {
+    public MapMatchingService(GraphHopperService hopperService,
+                              StreetSegmentService segmentService,
+                              RideRepository rideRepository) {
         this.hopperService = hopperService;
         this.segmentService = segmentService;
         this.rideRepository = rideRepository;
@@ -51,23 +52,23 @@ public class RideProcessingService {
                     .collect(Collectors.toList());
 
             MatchResult result = hopperService.match(observations);
-
-            // 1. Set trajectory
+            ride.setActualDistance(result.getMatchLength());
             updateRideTrajectory(ride, result);
 
-            // 2. Extract edge IDs
+            // Extract edge IDs
             List<EdgeIteratorState> edges = result.getEdgeMatches().stream()
                     .map(EdgeMatch::getEdgeState)
                     .collect(Collectors.toList());
 
-            ride.setTraversedEdgeIds(edges.stream().map(e -> (long) e.getEdge()).collect(Collectors.toList()));
+            ride.setTraversedEdgeIds(edges.stream().map(EdgeIteratorState::getEdge).collect(Collectors.toList()));
 
-            // 3. Update segments (Sort to prevent deadlocks)
+            // Update segments (Sort to prevent deadlocks)
             edges.sort(Comparator.comparingLong(EdgeIteratorState::getEdge));
             for (EdgeIteratorState edge : edges) {
                 segmentService.updateUsage(edge, hopperService);
             }
 
+            ride.setStatus(Status.PENDING);
             rideRepository.save(ride);
             return true;
         } catch (Exception e) {

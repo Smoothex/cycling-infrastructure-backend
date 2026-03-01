@@ -20,6 +20,8 @@ services:
       - "shared_buffers=1GB"
       - "-c"
       - "work_mem=64MB"
+      - "-c"
+      - "synchronous_commit=off"
 
   pgadmin:
     image: dpage/pgadmin4
