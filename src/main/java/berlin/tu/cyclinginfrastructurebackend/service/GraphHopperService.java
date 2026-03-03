@@ -6,14 +6,17 @@ import com.graphhopper.json.Statement;
 import com.graphhopper.matching.MapMatching;
 import com.graphhopper.matching.MatchResult;
 import com.graphhopper.matching.Observation;
-import com.graphhopper.util.CustomModel;
-import com.graphhopper.util.PMap;
+import com.graphhopper.util.*;
 import com.graphhopper.GHRequest;
 import com.graphhopper.GHResponse;
 import com.graphhopper.ResponsePath;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +39,7 @@ public class GraphHopperService {
     @Getter
     private GraphHopper hopper;
     private final ThreadLocal<MapMatching> mapMatchingThreadLocal = new ThreadLocal<>();
-
+    private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     private static final String PROFILE_BIKE_CUSTOM = "bike_custom";
     private static final String PROFILE_BIKE_SHORTEST = "bike_shortest";
 
@@ -86,6 +89,24 @@ public class GraphHopperService {
             return null;
         }
         return rsp.getBest();
+    }
+
+    public LineString getEdgeGeometry(int edgeId) {
+        EdgeIteratorState edge = hopper.getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
+
+        if (edge == null) return null;
+
+        PointList points = edge.fetchWayGeometry(FetchMode.ALL);
+        if (points.isEmpty()) return null;
+
+        Coordinate[] coords = new Coordinate[points.size()];
+        for (int i = 0; i < points.size(); i++) {
+            coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
+        }
+
+        if (coords.length < 2) return null;
+
+        return geometryFactory.createLineString(coords);
     }
 
     @PreDestroy
