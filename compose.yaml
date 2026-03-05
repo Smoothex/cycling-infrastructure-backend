@@ -15,8 +15,6 @@ services:
       - "-c"
       - "idle_in_transaction_session_timeout=35min"
       - "-c"
-      - "statement_timeout=60s"
-      - "-c"
       - "shared_buffers=1GB"
       - "-c"
       - "work_mem=64MB"

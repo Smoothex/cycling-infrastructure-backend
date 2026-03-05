@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.repository;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -21,5 +22,16 @@ public interface RideRepository extends JpaRepository<Ride, UUID> {
     @Query("SELECT r FROM Ride r LEFT JOIN FETCH r.ridePoints WHERE r.id = :id")
     Optional<Ride> findWithPointsById(UUID id);
 
-    List<Ride> findTop50ByStatus(Status status);
+    @Query("SELECT r.id FROM Ride r WHERE r.status = :status")
+    List<UUID> findIdsByStatus(Status status, Pageable pageable);
+
+    @Query("""
+        SELECT DISTINCT r FROM Ride r
+        LEFT JOIN FETCH r.ridePoints
+        LEFT JOIN FETCH r.traversedEdgeIds
+        WHERE r.id = :id
+        """)
+    Optional<Ride> findWithPointsAndEdgesById(UUID id);
+
+    long countByStatus(Status status);
 }

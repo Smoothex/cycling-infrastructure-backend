@@ -12,6 +12,11 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Collection;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class StreetSegmentService {
@@ -85,28 +90,50 @@ public class StreetSegmentService {
 
         // If the segment doesn't exist in the database yet, we must fetch its geometry from GraphHopper
         if (updated == 0) {
-            EdgeIteratorState edge = hopperService.getHopper().getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
-
-            if (edge != null) {
-                String name = edge.getName();
-                if (name == null || name.isBlank()) {
-                    name = findNearestStreetName(edge, hopperService);
-                }
-
-                PointList points = edge.fetchWayGeometry(FetchMode.ALL);
-                Coordinate[] coords = new Coordinate[points.size()];
-                for (int i = 0; i < points.size(); i++) {
-                    coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
-                }
-
-                if (coords.length >= 2) {
-                    repository.upsertSegment((long) edgeId,
-                            name != null ? name : "Unknown",
-                            geometryFactory.createLineString(coords));
-                }
-            }
-            // Increment again now that it exists
+            ensureSegmentExists(edgeId, hopperService);
             repository.incrementAvoidance(edgeId);
+        }
+    }
+
+    /**
+     * Batch-register multiple avoided edges in a single transaction.
+     * Upserts any missing segments first, then bulk-increments avoidance counts.
+     */
+    @Transactional
+    public void registerAvoidedEdges(Collection<Integer> edgeIds, GraphHopperService hopperService) {
+        if (edgeIds == null || edgeIds.isEmpty()) return;
+
+        // Ensure all segments exist in the DB before the bulk increment
+        for (Integer edgeId : edgeIds) {
+            ensureSegmentExists(edgeId, hopperService);
+        }
+
+        // UPDATE ... WHERE id IN (...) for all edges
+        Set<Long> longIds = edgeIds.stream().map(Integer::longValue).collect(Collectors.toSet());
+        repository.bulkIncrementAvoidance(longIds);
+    }
+
+    private void ensureSegmentExists(int edgeId, GraphHopperService hopperService) {
+        EdgeIteratorState edge = hopperService.getHopper().getBaseGraph()
+                .getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
+
+        if (edge != null) {
+            String name = edge.getName();
+            if (name == null || name.isBlank()) {
+                name = findNearestStreetName(edge, hopperService);
+            }
+
+            PointList points = edge.fetchWayGeometry(FetchMode.ALL);
+            Coordinate[] coords = new Coordinate[points.size()];
+            for (int i = 0; i < points.size(); i++) {
+                coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
+            }
+
+            if (coords.length >= 2) {
+                repository.upsertSegment((long) edgeId,
+                        name != null ? name : "Unknown",
+                        geometryFactory.createLineString(coords));
+            }
         }
     }
 }
