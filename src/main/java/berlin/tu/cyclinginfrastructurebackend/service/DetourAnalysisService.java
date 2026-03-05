@@ -115,7 +115,7 @@ public class DetourAnalysisService {
                 ride.setAvoidedEdgeIds(new ArrayList<>(avoidedEdges));
                 ride.setChosenEdgeIds(new ArrayList<>(chosenEdges));
 
-                avoidedEdges.forEach(edgeId -> streetSegmentService.registerAvoidedEdge(edgeId, graphHopperService));
+                streetSegmentService.registerAvoidedEdges(avoidedEdges, graphHopperService);
 
                 log.info("Ride {} identified as detour. Avoided {} edges, Chosen {} edges.",
                         ride.getId(), avoidedEdges.size(), chosenEdges.size());
