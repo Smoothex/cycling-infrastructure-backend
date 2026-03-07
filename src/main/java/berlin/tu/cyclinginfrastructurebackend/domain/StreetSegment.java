@@ -1,13 +1,13 @@
 package berlin.tu.cyclinginfrastructurebackend.domain;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.locationtech.jts.geom.LineString;
+
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "street_segments")
@@ -27,8 +27,24 @@ public class StreetSegment {
     private int usageCount = 0;
     private int avoidanceCount = 0;
 
+    /** avoidance / (avoidance + usage). Null until first observation. */
+    private Double avoidanceRatio;
+
+    @OneToMany(mappedBy = "segment", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<SegmentAvoidance> avoidances = new ArrayList<>();
+
     public void incrementUsage() {
         this.usageCount++;
+        recalculateAvoidanceRatio();
+    }
+
+    public void incrementAvoidance() {
+        this.avoidanceCount++;
+        recalculateAvoidanceRatio();
+    }
+
+    private void recalculateAvoidanceRatio() {
+        int total = usageCount + avoidanceCount;
+        this.avoidanceRatio = total > 0 ? (double) avoidanceCount / total : null;
     }
 }
-

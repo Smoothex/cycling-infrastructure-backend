@@ -97,10 +97,10 @@ public class DetourAnalysisScheduler {
             int batchErrors = 0;
             for (CompletableFuture<Status> f : futures) {
                 Status result = f.join();
-                if (result == Status.PROCESSED) {
-                    batchSuccess++;
-                } else {
+                if (result == Status.ERROR) {
                     batchErrors++;
+                } else {
+                    batchSuccess++;
                 }
             }
 
