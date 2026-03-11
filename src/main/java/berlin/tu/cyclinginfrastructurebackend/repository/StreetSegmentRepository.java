@@ -25,13 +25,6 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     @Transactional
     @Query("UPDATE StreetSegment s SET s.avoidanceCount = s.avoidanceCount + 1, " +
             "s.avoidanceRatio = CAST(s.avoidanceCount + 1 AS double) / (s.usageCount + s.avoidanceCount + 1) " +
-            "WHERE s.id = :id")
-    int incrementAvoidance(Integer id);
-
-    @Modifying
-    @Transactional
-    @Query("UPDATE StreetSegment s SET s.avoidanceCount = s.avoidanceCount + 1, " +
-            "s.avoidanceRatio = CAST(s.avoidanceCount + 1 AS double) / (s.usageCount + s.avoidanceCount + 1) " +
             "WHERE s.id IN :ids")
     void bulkIncrementAvoidance(Collection<Long> ids);
 

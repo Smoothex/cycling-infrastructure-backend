@@ -18,7 +18,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -63,9 +62,9 @@ public class StreetSegmentService {
         List<Integer> sortedEdgeIds = new ArrayList<>(edgeIds);
         Collections.sort(sortedEdgeIds);
 
-        Instant avoidedAt = ride.getStartTime() != null
-                ? Instant.ofEpochMilli(ride.getStartTime())
-                : Instant.now();
+        Long avoidedAt = ride.getStartTime() != null
+                ? ride.getStartTime()
+                : System.currentTimeMillis();
 
         for (Integer edgeId : sortedEdgeIds) {
             ensureSegmentExists(edgeId, hopperService);

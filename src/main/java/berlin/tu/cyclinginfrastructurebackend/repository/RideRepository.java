@@ -14,13 +14,8 @@ import java.util.UUID;
 
 @Repository
 public interface RideRepository extends JpaRepository<Ride, UUID> {
-    boolean existsByOriginalFilename(String originalFilename);
-
     @Query("SELECT r.originalFilename FROM Ride r")
     Set<String> findAllOriginalFilenames();
-
-    @Query("SELECT r FROM Ride r LEFT JOIN FETCH r.ridePoints WHERE r.id = :id")
-    Optional<Ride> findWithPointsById(UUID id);
 
     @Query("SELECT r.id FROM Ride r WHERE r.status = :status")
     List<UUID> findIdsByStatus(Status status, Pageable pageable);

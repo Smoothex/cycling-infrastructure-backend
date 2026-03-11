@@ -41,7 +41,7 @@ public class SegmentAvoidance {
     private Ride ride;
 
     @Column(nullable = false)
-    private Instant avoidedAt;
+    private Long avoidedAt;
 
     @Enumerated(EnumType.STRING)
     private DayOfWeek dayOfWeek;
@@ -49,13 +49,15 @@ public class SegmentAvoidance {
     /** Hour in Berlin local time (0-23), for quick time-of-day aggregation */
     private Integer hourOfDay;
 
-    public static SegmentAvoidance of(StreetSegment segment, Ride ride, Instant avoidedAt) {
+    private boolean weatherEnriched = false;
+
+    public static SegmentAvoidance of(StreetSegment segment, Ride ride, Long avoidedAt) {
         SegmentAvoidance sa = new SegmentAvoidance();
         sa.segment = segment;
         sa.ride = ride;
         sa.avoidedAt = avoidedAt;
 
-        ZonedDateTime berlinTime = avoidedAt.atZone(BERLIN_ZONE);
+        ZonedDateTime berlinTime = Instant.ofEpochMilli(avoidedAt).atZone(BERLIN_ZONE);
         sa.dayOfWeek = berlinTime.getDayOfWeek();
         sa.hourOfDay = berlinTime.getHour();
         return sa;

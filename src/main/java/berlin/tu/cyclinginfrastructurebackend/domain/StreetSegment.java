@@ -33,6 +33,9 @@ public class StreetSegment {
     @OneToMany(mappedBy = "segment", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<SegmentAvoidance> avoidances = new ArrayList<>();
 
+    @OneToMany(mappedBy = "segment", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<SegmentExternalFactor> externalFactors = new ArrayList<>();
+
     public void incrementUsage() {
         this.usageCount++;
         recalculateAvoidanceRatio();
