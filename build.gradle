@@ -30,6 +30,7 @@ dependencies {
     implementation 'org.hibernate.orm:hibernate-spatial'
     implementation 'com.graphhopper:graphhopper-core:11.0'
     implementation('com.graphhopper:graphhopper-map-matching:11.0')
+    implementation("com.fasterxml.jackson.core:jackson-annotations:2.21")
     implementation 'com.opencsv:opencsv:5.9'
     runtimeOnly 'org.postgresql:postgresql'
     compileOnly 'org.projectlombok:lombok'

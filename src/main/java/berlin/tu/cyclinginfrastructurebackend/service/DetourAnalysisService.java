@@ -4,6 +4,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import com.graphhopper.ResponsePath;
 import com.graphhopper.util.PointList;
 import com.graphhopper.util.details.PathDetail;
@@ -11,6 +12,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.PrecisionModel;
+import org.locationtech.jts.io.WKTWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,17 +28,24 @@ public class DetourAnalysisService {
     private final GraphHopperService graphHopperService;
     private final RideRepository rideRepository;
     private final StreetSegmentService streetSegmentService;
+    private final StreetSegmentRepository streetSegmentRepository;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
+    private final WKTWriter wktWriter = new WKTWriter();
 
     @Value("${analysis.detour.threshold}")
     private double detourThreshold;
 
+    @Value("${analysis.spatial.proximity-meters}")
+    private double proximityMeters;
+
     public DetourAnalysisService(GraphHopperService graphHopperService,
                                  RideRepository rideRepository,
-                                 StreetSegmentService streetSegmentService) {
+                                 StreetSegmentService streetSegmentService,
+                                 StreetSegmentRepository streetSegmentRepository) {
         this.graphHopperService = graphHopperService;
         this.rideRepository = rideRepository;
         this.streetSegmentService = streetSegmentService;
+        this.streetSegmentRepository = streetSegmentRepository;
     }
 
     @Transactional
@@ -82,7 +91,6 @@ public class DetourAnalysisService {
             ride.setIsDetour(isDetour);
 
             if (isDetour) {
-                // 1. Reconstruct Shortest Path Geometry
                 PointList ghPoints = shortestPath.getPoints();
                 Coordinate[] coords = new Coordinate[ghPoints.size()];
                 for (int i = 0; i < ghPoints.size(); i++) {
@@ -91,31 +99,26 @@ public class DetourAnalysisService {
                 LineString shortestPathGeometry = geometryFactory.createLineString(coords);
                 LineString actualTrajectory = ride.getTrajectory();
 
-                double distanceThresholdDegrees = 0.0002;   // Roughly 20 meters in degrees
+                // Ensure shortest-path edges exist in DB so ST_DWithin can query them
+                ensureEdgesExist(shortestEdges);
 
                 Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
-                        shortestEdges,
-                        actualEdges,
-                        actualTrajectory,
-                        distanceThresholdDegrees
-                );
+                        shortestEdges, actualEdges, actualTrajectory);
 
                 if (isAlternativeRoute(shortestEdges, avoidedEdges, 0.30)) {
-                    log.info("Ride {} is an ALTERNATIVE ROUTE. Skipping edge registration to prevent noise.", ride.getId());
-                    return markAs(ride, Status.PROCESSED);  // TODO: Consider a separate status for alternative routes
+                    log.info("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
+                    return markAs(ride, Status.ALTERNATIVE_ROUTE);
                 }
 
+                ensureEdgesExist(actualEdges);
+
                 Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
-                        actualEdges,
-                        shortestEdges,
-                        shortestPathGeometry,
-                        distanceThresholdDegrees
-                );
+                        actualEdges, shortestEdges, shortestPathGeometry);
 
                 ride.setAvoidedEdgeIds(new ArrayList<>(avoidedEdges));
                 ride.setChosenEdgeIds(new ArrayList<>(chosenEdges));
 
-                streetSegmentService.registerAvoidedEdges(avoidedEdges, graphHopperService);
+                streetSegmentService.registerAvoidedEdges(avoidedEdges, ride, graphHopperService);
 
                 log.info("Ride {} identified as detour. Avoided {} edges, Chosen {} edges.",
                         ride.getId(), avoidedEdges.size(), chosenEdges.size());
@@ -147,41 +150,46 @@ public class DetourAnalysisService {
     }
 
     /**
-     * Filters a set of GraphHopper edges to find those that are physically distant from a reference path.
-     * <p>
-     * This solves the "parallel edge" problem in OSM/GraphHopper where a cyclist riding on a
-     * segregated cycle path or in the opposite direction is assigned a different edge ID than the
-     * main road. Instead of relying purely on ID differences, this method checks the actual
-     * spatial distance between the edge and the reference geometry.
+     * Ensures all edges exist in street_segments so PostGIS ST_DWithin queries can work.
+     * Processes edge IDs in sorted (ascending) order to prevent deadlocks.
+     */
+    private void ensureEdgesExist(Set<Integer> edgeIds) {
+        List<Integer> sortedEdgeIds = new ArrayList<>(edgeIds);
+        Collections.sort(sortedEdgeIds);
+
+        for (Integer edgeId : sortedEdgeIds) {
+            if (!streetSegmentRepository.existsById(edgeId.longValue())) {
+                LineString geom = graphHopperService.getEdgeGeometry(edgeId);
+                if (geom != null && geom.getNumPoints() >= 2) {
+                    streetSegmentRepository.upsertSegment(
+                            edgeId.longValue(), "Unknown", geom.toText());
+                }
+            }
+        }
+    }
+
+    /**
+     * Filters source edges to find those physically distant from a reference path.
+     * Uses PostGIS ST_DWithin (meters) to solve the "parallel edge" problem — segregated
+     * cycle paths or opposite-direction edges get different IDs but are spatially close.
      *
-     * @param sourceEdges        The set of GraphHopper edge IDs to be evaluated (e.g., the shortest path edges).
-     * @param referenceEdges     The set of baseline edge IDs to skip. If an edge ID is in this set,
-     *                           it is considered shared and immediately excluded from the results.
-     * @param referenceGeometry  The JTS LineString representing the physical path to measure against
-     *                           (e.g., the user's actual GPS trajectory).
-     * @param distanceThreshold  The maximum allowed distance between a source edge and the reference geometry for
-     *                           it to be considered "close enough". Unit in degrees.
-     * @return                   A filtered Set of edge IDs from the sourceEdges that are
-     *                           spatially divergent from the reference geometry.
+     * @param sourceEdges       Edges to evaluate (e.g., shortest-path edges)
+     * @param referenceEdges    Edges to skip (shared between both paths)
+     * @param referenceGeometry The physical path to measure against
+     * @return Edge IDs that are genuinely spatially divergent from the reference path
      */
     private Set<Integer> filterSpatiallyDistantEdges(Set<Integer> sourceEdges,
                                                      Set<Integer> referenceEdges,
-                                                     LineString referenceGeometry,
-                                                     double distanceThreshold) {
+                                                     LineString referenceGeometry) {
         Set<Integer> filteredEdges = new HashSet<>();
+        String referenceWkt = wktWriter.write(referenceGeometry);
 
         for (Integer edgeId : sourceEdges) {
-            // Only evaluate edges that aren't already shared
             if (!referenceEdges.contains(edgeId)) {
-                LineString edgeGeometry = graphHopperService.getEdgeGeometry(edgeId);
-
-                if (edgeGeometry != null) {
-                    // Check if the edge geometry is spatially distant from the reference geometry
-                    if (referenceGeometry.distance(edgeGeometry) > distanceThreshold) {
-                        filteredEdges.add(edgeId);
-                    }
-                } else {
-                    filteredEdges.add(edgeId);  // fallback if geometry not available
+                boolean isClose = streetSegmentRepository.isEdgeWithinDistance(
+                        edgeId, referenceWkt, proximityMeters);
+                if (!isClose) {
+                    filteredEdges.add(edgeId);
                 }
             }
         }
