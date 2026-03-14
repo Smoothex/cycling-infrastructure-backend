@@ -1,4 +1,4 @@
-package berlin.tu.cyclinginfrastructurebackend.service;
+package berlin.tu.cyclinginfrastructurebackend.service.DataProviders;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 

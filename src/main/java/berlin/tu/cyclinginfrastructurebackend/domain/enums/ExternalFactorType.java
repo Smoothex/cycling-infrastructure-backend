@@ -3,6 +3,9 @@ package berlin.tu.cyclinginfrastructurebackend.domain.enums;
 public enum ExternalFactorType {
     WEATHER,
     CONSTRUCTION,
-    ROAD_CLOSURE
+    ROAD_CLOSURE,
+    EVENT,
+    HAZARD,
+    INCIDENT
 }
 

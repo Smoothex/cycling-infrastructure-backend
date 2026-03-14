@@ -22,5 +22,10 @@ public interface SegmentAvoidanceRepository extends JpaRepository<SegmentAvoidan
     List<SegmentAvoidance> findUnenrichedByWeather(Pageable pageable);
 
     long countByWeatherEnriched(boolean weatherEnriched);
+
+    @Query("SELECT sa FROM SegmentAvoidance sa JOIN FETCH sa.segment WHERE sa.berlinOpenDataEnriched = false")
+    List<SegmentAvoidance> findUnenrichedByBerlinOpenData(Pageable pageable);
+
+    long countByBerlinOpenDataEnriched(boolean berlinOpenDataEnriched);
 }
 

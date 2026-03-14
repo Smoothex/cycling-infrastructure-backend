@@ -32,6 +32,7 @@ dependencies {
     implementation('com.graphhopper:graphhopper-map-matching:11.0')
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.21")
     implementation 'com.opencsv:opencsv:5.9'
+    implementation("org.locationtech.jts.io:jts-io-common:1.20.0")
     runtimeOnly 'org.postgresql:postgresql'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-docker-compose'

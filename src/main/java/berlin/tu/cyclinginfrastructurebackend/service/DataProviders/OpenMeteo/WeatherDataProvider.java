@@ -1,8 +1,9 @@
-package berlin.tu.cyclinginfrastructurebackend.service;
+package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo;
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentExternalFactor;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.ExternalDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.OpenMeteoResponse;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.LineString;
