@@ -1,4 +1,4 @@
-package berlin.tu.cyclinginfrastructurebackend.service;
+package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.SimRa;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Incident;
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;

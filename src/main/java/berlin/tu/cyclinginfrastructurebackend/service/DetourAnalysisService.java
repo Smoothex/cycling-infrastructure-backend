@@ -81,6 +81,17 @@ public class DetourAnalysisService {
             Set<Integer> shortestEdges = extractEdgeIds(shortestPath);
             Set<Integer> actualEdges = new HashSet<>(ride.getTraversedEdgeIds());
 
+            // Build shortest-path geometry and persist (can be removed in the future)
+            PointList ghPoints = shortestPath.getPoints();
+            Coordinate[] coords = new Coordinate[ghPoints.size()];
+            for (int i = 0; i < ghPoints.size(); i++) {
+                coords[i] = new Coordinate(ghPoints.getLon(i), ghPoints.getLat(i));
+            }
+            LineString shortestPathGeometry = geometryFactory.createLineString(coords);
+
+            ride.setShortestPath(shortestPathGeometry);
+            ride.setShortestPathEdgeIds(new ArrayList<>(shortestEdges));
+
             double shortestPathDistance = shortestPath.getDistance();
             double actualDistance = ride.getActualDistance();
 
@@ -91,12 +102,6 @@ public class DetourAnalysisService {
             ride.setIsDetour(isDetour);
 
             if (isDetour) {
-                PointList ghPoints = shortestPath.getPoints();
-                Coordinate[] coords = new Coordinate[ghPoints.size()];
-                for (int i = 0; i < ghPoints.size(); i++) {
-                    coords[i] = new Coordinate(ghPoints.getLon(i), ghPoints.getLat(i));
-                }
-                LineString shortestPathGeometry = geometryFactory.createLineString(coords);
                 LineString actualTrajectory = ride.getTrajectory();
 
                 // Ensure shortest-path edges exist in DB so ST_DWithin can query them
@@ -158,13 +163,7 @@ public class DetourAnalysisService {
         Collections.sort(sortedEdgeIds);
 
         for (Integer edgeId : sortedEdgeIds) {
-            if (!streetSegmentRepository.existsById(edgeId.longValue())) {
-                LineString geom = graphHopperService.getEdgeGeometry(edgeId);
-                if (geom != null && geom.getNumPoints() >= 2) {
-                    streetSegmentRepository.upsertSegment(
-                            edgeId.longValue(), "Unknown", geom.toText());
-                }
-            }
+            streetSegmentService.ensureSegmentExists(edgeId, graphHopperService);
         }
     }
 

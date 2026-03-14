@@ -59,6 +59,18 @@ public class Ride {
     private Double shortestPathDistance;
     private Boolean isDetour;
 
+    @Column(columnDefinition = "geometry(LineString,4326)")
+    private LineString shortestPath;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
+            name = "ride_shortest_path_edges",
+            joinColumns = @JoinColumn(name = "ride_id"),
+            indexes = @Index(name = "idx_shortest_path_edge_id", columnList = "edge_id")
+    )
+    @Column(name = "edge_id")
+    private List<Integer> shortestPathEdgeIds = new ArrayList<>();
+
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "ride_avoided_edges", joinColumns = @JoinColumn(name = "ride_id"))
     @Column(name = "edge_id")

@@ -51,6 +51,9 @@ public class SegmentAvoidance {
 
     private boolean weatherEnriched = false;
 
+    @Column(columnDefinition = "boolean not null default false")
+    private boolean berlinOpenDataEnriched = false;
+
     public static SegmentAvoidance of(StreetSegment segment, Ride ride, Long avoidedAt) {
         SegmentAvoidance sa = new SegmentAvoidance();
         sa.segment = segment;

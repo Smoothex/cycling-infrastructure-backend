@@ -82,7 +82,7 @@ public class StreetSegmentService {
         avoidanceRepository.saveAll(avoidanceRecords);
     }
 
-    private void ensureSegmentExists(int edgeId, GraphHopperService hopperService) {
+    public void ensureSegmentExists(int edgeId, GraphHopperService hopperService) {
         EdgeIteratorState edge = hopperService.getHopper().getBaseGraph()
                 .getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
 
@@ -119,7 +119,7 @@ public class StreetSegmentService {
 
         double lat = points.getLat(points.size() / 2);
         double lon = points.getLon(points.size() / 2);
-        double radius = 0.0002;
+        double radius = 0.0003;
         BBox bbox = new BBox(lon - radius, lon + radius, lat - radius, lat + radius);
 
         final String[] bestName = {null};
