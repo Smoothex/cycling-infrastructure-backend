@@ -5,8 +5,8 @@ import berlin.tu.cyclinginfrastructurebackend.domain.SegmentExternalFactor;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
 import berlin.tu.cyclinginfrastructurebackend.repository.IncidentRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
-import berlin.tu.cyclinginfrastructurebackend.service.ExternalFactorService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto.ExternalFactorDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto.IncidentBreakdownDto;
@@ -26,14 +26,14 @@ public class SegmentController {
 
     private final StreetSegmentRepository segmentRepository;
     private final IncidentRepository incidentRepository;
-    private final ExternalFactorService externalFactorService;
+    private final SegmentExternalFactorRepository segmentExternalFactorRepository;
 
     public SegmentController(StreetSegmentRepository segmentRepository,
                              IncidentRepository incidentRepository,
-                             ExternalFactorService externalFactorService) {
+                             SegmentExternalFactorRepository segmentExternalFactorRepository) {
         this.segmentRepository = segmentRepository;
         this.incidentRepository = incidentRepository;
-        this.externalFactorService = externalFactorService;
+        this.segmentExternalFactorRepository = segmentExternalFactorRepository;
     }
 
     @GetMapping("/{id}")
@@ -75,11 +75,11 @@ public class SegmentController {
 
         List<SegmentExternalFactor> factors;
         if (from != null && to != null) {
-            factors = externalFactorService.getFactorsInRange(id, from, to);
+            factors = segmentExternalFactorRepository.findOverlapping(id, from, to);
         } else if (factorType != null) {
-            factors = externalFactorService.getFactorsByType(id, factorType);
+            factors = segmentExternalFactorRepository.findBySegmentIdAndFactorType(id, factorType);
         } else {
-            factors = externalFactorService.getFactorsForSegment(id);
+            factors = segmentExternalFactorRepository.findBySegmentId(id);
         }
 
         List<ExternalFactorDto> dtos = factors.stream()
@@ -102,7 +102,7 @@ public class SegmentController {
                 .map(e -> new IncidentBreakdownDto(e.getKey(), e.getValue()))
                 .toList();
 
-        List<ExternalFactorDto> factors = externalFactorService.getFactorsForSegment(segment.getId())
+        List<ExternalFactorDto> factors = segmentExternalFactorRepository.findBySegmentId(segment.getId())
                 .stream()
                 .map(this::toFactorDto)
                 .toList();

@@ -5,6 +5,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentAvoidanceRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.BerlinOpenData.RoadClosureDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeApiDataProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +30,7 @@ public class ExternalFactorEnrichmentScheduler {
     private final SegmentAvoidanceRepository avoidanceRepository;
     private final WeatherDataProvider weatherDataProvider;
     private final RoadClosureDataProvider roadClosureDataProvider;
+    private final OhsomeApiDataProvider ohsomeApiDataProvider;
 
     @Value("${enrichment.weather.enabled:false}")
     private boolean weatherEnabled;
@@ -45,12 +47,23 @@ public class ExternalFactorEnrichmentScheduler {
     @Value("${enrichment.berlin-open-data.batch-size:100}")
     private int berlinOpenDataBatchSize;
 
+    @Value("${enrichment.ohsome.enabled:false}")
+    private boolean ohsomeEnabled;
+
+    @Value("${enrichment.ohsome.batch-size:50}")
+    private int ohsomeBatchSize;
+
+    @Value("${enrichment.ohsome.delay-between-calls-ms:500}")
+    private long ohsomeDelayMs;
+
     public ExternalFactorEnrichmentScheduler(SegmentAvoidanceRepository avoidanceRepository,
                                              WeatherDataProvider weatherDataProvider,
-                                             RoadClosureDataProvider roadClosureDataProvider) {
+                                             RoadClosureDataProvider roadClosureDataProvider,
+                                             OhsomeApiDataProvider ohsomeApiDataProvider) {
         this.avoidanceRepository = avoidanceRepository;
         this.weatherDataProvider = weatherDataProvider;
         this.roadClosureDataProvider = roadClosureDataProvider;
+        this.ohsomeApiDataProvider = ohsomeApiDataProvider;
     }
 
     // ---- Weather enrichment ----
@@ -75,7 +88,7 @@ public class ExternalFactorEnrichmentScheduler {
 
     // ---- Berlin Open Data enrichment ----
 
-    @Scheduled()
+    @Scheduled(fixedDelay = 60000)
     public void enrichBerlinOpenDataPending() {
         if (!berlinOpenDataEnabled) return;
 
@@ -88,6 +101,26 @@ public class ExternalFactorEnrichmentScheduler {
                 roadClosureDataProvider::enrichSegment,
                 avoidance -> {
                     avoidance.setBerlinOpenDataEnriched(true);
+                    avoidanceRepository.save(avoidance);
+                }
+        );
+    }
+
+    // ---- Ohsome Enrichment ----
+
+    @Scheduled(fixedDelayString = "${enrichment.ohsome.schedule-delay-ms:60000}")
+    public void enrichOhsomePending() {
+        if (!ohsomeEnabled) return;
+
+        runGenericEnrichment(
+                "Ohsome API",
+                avoidanceRepository::findUnenrichedByOhsome,
+                avoidanceRepository.countByOhsomeEnriched(false),
+                ohsomeBatchSize,
+                ohsomeDelayMs,
+                ohsomeApiDataProvider::enrichAvoidance,
+                avoidance -> {
+                    avoidance.setOhsomeEnriched(true);
                     avoidanceRepository.save(avoidance);
                 }
         );
@@ -114,6 +147,27 @@ public class ExternalFactorEnrichmentScheduler {
                                long delayMs,
                                TriConsumer<StreetSegment, Long, Long> enrichFn,
                                Consumer<SegmentAvoidance> markDone) {
+        runGenericEnrichment(label, batchFetcher, totalUnenriched, batchSize, delayMs,
+            avoidance -> {
+                StreetSegment segment = avoidance.getSegment();
+                Long avoidedAt = avoidance.getAvoidedAt();
+                long hourStart = avoidedAt - (avoidedAt % ONE_HOUR_MILLIS);
+                enrichFn.accept(segment, hourStart, hourStart + ONE_HOUR_MILLIS);
+            },
+            markDone
+        );
+    }
+
+    /**
+     * Generic enrichment that processes SegmentAvoidance objects directly.
+     */
+    private void runGenericEnrichment(String label,
+                               Function<Pageable, List<SegmentAvoidance>> batchFetcher,
+                               long totalUnenriched,
+                               int batchSize,
+                               long delayMs,
+                               Consumer<SegmentAvoidance> enrichFn,
+                               Consumer<SegmentAvoidance> markDone) {
         if (totalUnenriched == 0) {
             log.debug("No unenriched avoidances for {}.", label);
             return;
@@ -130,12 +184,7 @@ public class ExternalFactorEnrichmentScheduler {
 
             for (SegmentAvoidance avoidance : batch) {
                 try {
-                    StreetSegment segment = avoidance.getSegment();
-                    Long avoidedAt = avoidance.getAvoidedAt();
-
-                    long hourStart = avoidedAt - (avoidedAt % ONE_HOUR_MILLIS);
-                    enrichFn.accept(segment, hourStart, hourStart + ONE_HOUR_MILLIS);
-
+                    enrichFn.accept(avoidance);
                     markDone.accept(avoidance);
                     totalProcessed++;
 
@@ -152,8 +201,7 @@ public class ExternalFactorEnrichmentScheduler {
                 }
             }
 
-            log.info("{} enrichment batch done: {} processed, {} errors so far.",
-                    label, totalProcessed, totalErrors);
+             if (totalProcessed + totalErrors >= totalUnenriched && batch.size() < batchSize) break;
         }
 
         Duration elapsed = Duration.between(runStart, Instant.now());
@@ -167,4 +215,3 @@ public class ExternalFactorEnrichmentScheduler {
         void accept(A a, B b, C c);
     }
 }
-

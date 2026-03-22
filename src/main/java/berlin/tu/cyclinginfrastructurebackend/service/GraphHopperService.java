@@ -10,6 +10,8 @@ import com.graphhopper.util.*;
 import com.graphhopper.GHRequest;
 import com.graphhopper.GHResponse;
 import com.graphhopper.ResponsePath;
+import com.graphhopper.routing.ev.Surface;
+import com.graphhopper.routing.ev.EnumEncodedValue;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
@@ -90,6 +92,17 @@ public class GraphHopperService {
         }
         return rsp.getBest();
     }
+
+    public String getSurface(int edgeId) {
+        EdgeIteratorState edge = hopper.getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
+        if (edge == null) return null;
+
+        EnumEncodedValue<Surface> surfaceEnc = hopper.getEncodingManager().getEnumEncodedValue(Surface.KEY, Surface.class);
+        Surface surface = edge.get(surfaceEnc);
+
+        return surface.toString();
+    }
+
 
     public LineString getEdgeGeometry(int edgeId) {
         EdgeIteratorState edge = hopper.getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);

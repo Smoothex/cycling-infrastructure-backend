@@ -30,11 +30,11 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
 
     @Modifying
     @Query(value = """
-        INSERT INTO street_segments (id, street_name, geometry, usage_count, avoidance_count, avoidance_ratio)
-        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL)
-        ON CONFLICT (id) DO NOTHING
-        """, nativeQuery = true)
-    void upsertSegment(Long id, String name, Object geom);
+        INSERT INTO street_segments (id, street_name, geometry, usage_count, avoidance_count, avoidance_ratio, surface)
+        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL, :surface)
+        ON CONFLICT (id) DO UPDATE SET surface = EXCLUDED.surface
+    """, nativeQuery = true)
+    void upsertSegment(Long id, String name, Object geom, String surface);
 
     /** Segments with highest avoidance ratio, filtered by minimum total observations to reduce noise. */
     @Query("SELECT s FROM StreetSegment s " +

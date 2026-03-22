@@ -102,11 +102,12 @@ public class DetourAnalysisService {
             ride.setIsDetour(isDetour);
 
             if (isDetour) {
+                Set<Integer> allEdges = new HashSet<>(shortestEdges);
+                allEdges.addAll(actualEdges);
+
+                ensureEdgesExist(allEdges);
+
                 LineString actualTrajectory = ride.getTrajectory();
-
-                // Ensure shortest-path edges exist in DB so ST_DWithin can query them
-                ensureEdgesExist(shortestEdges);
-
                 Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
                         shortestEdges, actualEdges, actualTrajectory);
 
@@ -114,8 +115,6 @@ public class DetourAnalysisService {
                     log.info("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
                     return markAs(ride, Status.ALTERNATIVE_ROUTE);
                 }
-
-                ensureEdgesExist(actualEdges);
 
                 Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
                         actualEdges, shortestEdges, shortestPathGeometry);
