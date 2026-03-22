@@ -54,6 +54,16 @@ public class SegmentAvoidance {
     @Column(columnDefinition = "boolean not null default false")
     private boolean berlinOpenDataEnriched = false;
 
+    @Column(columnDefinition = "boolean not null default false")
+    private boolean ohsomeEnriched = false;
+
+    private String surface;
+    private String smoothness;
+    private String lit;
+    private String highway;
+    private Integer maxspeed;
+    private String cycleway;
+
     public static SegmentAvoidance of(StreetSegment segment, Ride ride, Long avoidedAt) {
         SegmentAvoidance sa = new SegmentAvoidance();
         sa.segment = segment;
@@ -66,4 +76,3 @@ public class SegmentAvoidance {
         return sa;
     }
 }
-

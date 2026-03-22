@@ -42,8 +42,9 @@ public class StreetSegmentService {
             String name = resolveEdgeName(edge, hopperService);
             PointList points = edge.fetchWayGeometry(FetchMode.ALL);
             Coordinate[] coords = toCoordinates(points);
+            String surface = hopperService.getSurface((int) edgeId);
 
-            repository.upsertSegment(edgeId, name, geometryFactory.createLineString(coords));
+            repository.upsertSegment(edgeId, name, geometryFactory.createLineString(coords), surface);
             repository.incrementUsage(edgeId);
         }
     }
@@ -90,9 +91,10 @@ public class StreetSegmentService {
             String name = resolveEdgeName(edge, hopperService);
             PointList points = edge.fetchWayGeometry(FetchMode.ALL);
             Coordinate[] coords = toCoordinates(points);
+            String surface = hopperService.getSurface(edgeId);
 
             if (coords.length >= 2) {
-                repository.upsertSegment((long) edgeId, name, geometryFactory.createLineString(coords));
+                repository.upsertSegment((long) edgeId, name, geometryFactory.createLineString(coords), surface);
             }
         }
     }
