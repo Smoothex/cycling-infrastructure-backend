@@ -1,5 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.domain;
 
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -63,12 +64,30 @@ public class SegmentAvoidance {
     private String highway;
     private Integer maxspeed;
     private String cycleway;
+    private Double temperature2m;
+    private Double precipitation;
+    private Double windSpeed10m;
+    private Double windDirection10m;
+    private Integer weatherCode;
+    private Double shortestPathBearingDegrees;  // direction the rider would have taken on the shortest path
+    private Double relativeWindAngleDegrees;
+
+    @Enumerated(EnumType.STRING)
+    private WindExposure windExposure;
 
     public static SegmentAvoidance of(StreetSegment segment, Ride ride, Long avoidedAt) {
+        return of(segment, ride, avoidedAt, null);
+    }
+
+    public static SegmentAvoidance of(StreetSegment segment,
+                                      Ride ride,
+                                      Long avoidedAt,
+                                      Double shortestPathBearingDegrees) {
         SegmentAvoidance sa = new SegmentAvoidance();
         sa.segment = segment;
         sa.ride = ride;
         sa.avoidedAt = avoidedAt;
+        sa.shortestPathBearingDegrees = shortestPathBearingDegrees;
 
         ZonedDateTime berlinTime = Instant.ofEpochMilli(avoidedAt).atZone(BERLIN_ZONE);
         sa.dayOfWeek = berlinTime.getDayOfWeek();

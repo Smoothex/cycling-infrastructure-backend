@@ -67,7 +67,7 @@ public class OhsomeApiDataProvider {
                     avoidance.setSmoothness((String) props.get("smoothness"));
                     avoidance.setLit((String) props.get("lit"));
                     avoidance.setHighway((String) props.get("highway"));
-                    avoidance.setMaxspeed((Integer) props.get("maxspeed"));
+                    avoidance.setMaxspeed(Integer.parseInt((String) props.get("maxspeed")));
                     avoidance.setCycleway((String) props.get("cycleway"));
                 }
             }

@@ -72,13 +72,13 @@ public class ExternalFactorEnrichmentScheduler {
     public void enrichWeatherPending() {
         if (!weatherEnabled) return;
 
-        runEnrichment(
+        runGenericEnrichment(
                 "Weather",
                 avoidanceRepository::findUnenrichedByWeather,
                 avoidanceRepository.countByWeatherEnriched(false),
                 weatherBatchSize,
                 weatherDelayMs,
-                weatherDataProvider::enrichSegment,
+                weatherDataProvider::enrichAvoidance,
                 avoidance -> {
                     avoidance.setWeatherEnriched(true);
                     avoidanceRepository.save(avoidance);
