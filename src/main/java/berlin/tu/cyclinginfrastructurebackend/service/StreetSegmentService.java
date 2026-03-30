@@ -52,15 +52,17 @@ public class StreetSegmentService {
     /**
      * Batch-register avoided edges: upserts missing segments, increments avoidance counts,
      * and creates temporal SegmentAvoidance records for later correlation with external factors.
+     * The map value carries the shortest-path travel bearing for each avoided edge, which can
+     * differ by ride even for the same physical segment.
      * Processes edge IDs in sorted (ascending) order to maintain consistent lock ordering
      * across concurrent transactions, preventing deadlocks.
      */
     @Transactional
-    public void registerAvoidedEdges(Collection<Integer> edgeIds, Ride ride, GraphHopperService hopperService) {
-        if (edgeIds == null || edgeIds.isEmpty()) return;
+    public void registerAvoidedEdges(Map<Integer, Double> edgeBearings, Ride ride, GraphHopperService hopperService) {
+        if (edgeBearings == null || edgeBearings.isEmpty()) return;
 
         // Sort to avoid deadlocks
-        List<Integer> sortedEdgeIds = new ArrayList<>(edgeIds);
+        List<Integer> sortedEdgeIds = new ArrayList<>(edgeBearings.keySet());
         Collections.sort(sortedEdgeIds);
 
         Long avoidedAt = ride.getStartTime() != null
@@ -78,7 +80,7 @@ public class StreetSegmentService {
         List<SegmentAvoidance> avoidanceRecords = new ArrayList<>();
         for (Integer edgeId : sortedEdgeIds) {
             StreetSegment segment = repository.getReferenceById(edgeId.longValue());
-            avoidanceRecords.add(SegmentAvoidance.of(segment, ride, avoidedAt));
+            avoidanceRecords.add(SegmentAvoidance.of(segment, ride, avoidedAt, edgeBearings.get(edgeId)));
         }
         avoidanceRepository.saveAll(avoidanceRecords);
     }

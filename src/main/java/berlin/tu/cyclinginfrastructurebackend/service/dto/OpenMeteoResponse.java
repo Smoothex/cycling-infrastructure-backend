@@ -19,6 +19,7 @@ public record OpenMeteoResponse(
             @JsonProperty("temperature_2m") List<Double> temperature2m,
             @JsonProperty("precipitation") List<Double> precipitation,
             @JsonProperty("wind_speed_10m") List<Double> windSpeed10m,
+            @JsonProperty("wind_direction_10m") List<Double> windDirection10m,
             @JsonProperty("weather_code") List<Integer> weatherCode
     ) {}
 }

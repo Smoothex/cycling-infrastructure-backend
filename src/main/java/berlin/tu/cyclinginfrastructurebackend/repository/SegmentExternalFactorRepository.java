@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -23,5 +24,10 @@ public interface SegmentExternalFactorRepository extends JpaRepository<SegmentEx
 
     /** Check if an external factor already exist for this segment, type, and start time */
     boolean existsBySegmentIdAndFactorTypeAndValidFrom(Long segmentId, ExternalFactorType factorType, Long validFrom);
-}
 
+    Optional<SegmentExternalFactor> findFirstBySegmentIdAndFactorTypeAndValidFrom(
+            Long segmentId,
+            ExternalFactorType factorType,
+            Long validFrom
+    );
+}
