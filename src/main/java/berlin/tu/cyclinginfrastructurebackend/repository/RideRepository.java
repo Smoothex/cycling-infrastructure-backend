@@ -50,23 +50,4 @@ public interface RideRepository extends JpaRepository<Ride, UUID> {
         """, nativeQuery = true)
     List<Object[]> findRidesWithDetourRatio(Pageable pageable);
 
-    /**
-     * For a single ride, returns every shortest-path edge also recorded
-     * as an avoidance by <em>any</em> ride, together with the avoidance metadata.
-     * Each row: [edge_id (long), segment_street_name (String), avoidance_count (long),
-     *            total_rides_avoiding (long)]
-     */
-    @Query(value = """
-        SELECT spe.edge_id,
-               ss.street_name,
-               ss.avoidance_count,
-               COUNT(DISTINCT sa.ride_id) AS total_rides_avoiding
-        FROM ride_shortest_path_edges spe
-        JOIN street_segments ss       ON ss.id = spe.edge_id
-        JOIN segment_avoidances sa    ON sa.segment_id = spe.edge_id
-        WHERE spe.ride_id = :rideId
-        GROUP BY spe.edge_id, ss.street_name, ss.avoidance_count
-        ORDER BY ss.avoidance_count DESC
-        """, nativeQuery = true)
-    List<Object[]> findShortestPathEdgesWithAvoidances(UUID rideId);
 }

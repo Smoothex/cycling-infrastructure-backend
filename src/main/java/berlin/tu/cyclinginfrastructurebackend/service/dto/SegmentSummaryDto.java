@@ -9,6 +9,8 @@ public record SegmentSummaryDto(
         int usageCount,
         int avoidanceCount,
         Double avoidanceRatio,
+        int preferenceCount,
+        Double preferenceRatio,
         long incidentCount,
         List<IncidentBreakdownDto> incidentBreakdown,
         List<ExternalFactorDto> externalFactors
@@ -24,5 +26,4 @@ public record SegmentSummaryDto(
             Map<String, Object> metadata
     ) {}
 }
-
 

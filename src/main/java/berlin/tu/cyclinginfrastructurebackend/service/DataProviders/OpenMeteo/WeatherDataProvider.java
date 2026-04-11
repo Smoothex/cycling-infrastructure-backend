@@ -1,6 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo;
 
-import berlin.tu.cyclinginfrastructurebackend.domain.SegmentAvoidance;
+import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentExternalFactor;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
@@ -94,35 +94,35 @@ public class WeatherDataProvider implements ExternalDataProvider {
     }
 
     /**
-     * Populates a recorded avoidance event with the hourly weather snapshot for the hour in which
-     * the avoidance happened. If the hourly weather factor is not stored yet, it is fetched on demand.
+     * Populates a recorded segment event with the hourly weather snapshot for the hour in which
+     * the event happened. If the hourly weather factor is not stored yet, it is fetched on demand.
      * <p>
      * Besides copying the raw weather values, this also derives the rider's wind exposure by comparing
-     * the shortest-path travel bearing with the meteorological wind direction.
+     * the path travel bearing with the meteorological wind direction.
      *
-     * @param avoidance the avoidance event to enrich
+     * @param event the segment event to enrich
      */
-    public void enrichAvoidance(SegmentAvoidance avoidance) {
-        if (avoidance == null || avoidance.getSegment() == null || avoidance.getAvoidedAt() == null) {
-            log.warn("Avoidance is missing segment or timestamp, skipping weather enrichment.");
+    public void enrichEvent(SegmentEvent event) {
+        if (event == null || event.getSegment() == null || event.getEventTimestamp() == null) {
+            log.warn("Segment event is missing segment or timestamp, skipping weather enrichment.");
             return;
         }
 
-        long hourStart = avoidance.getAvoidedAt() - (avoidance.getAvoidedAt() % ONE_HOUR_MILLIS);
-        ensureWeatherDataExists(avoidance.getSegment(), hourStart);
+        long hourStart = event.getEventTimestamp() - (event.getEventTimestamp() % ONE_HOUR_MILLIS);
+        ensureWeatherDataExists(event.getSegment(), hourStart);
 
         Optional<SegmentExternalFactor> weatherFactor = factorRepository.findFirstBySegmentIdAndFactorTypeAndValidFrom(
-                avoidance.getSegment().getId(),
+                event.getSegment().getId(),
                 ExternalFactorType.WEATHER,
                 hourStart
         );
 
         if (weatherFactor.isEmpty() || weatherFactor.get().getMetadata() == null) {
-            log.warn("No weather factor available for segment {} at {}.", avoidance.getSegment().getId(), hourStart);
+            log.warn("No weather factor available for segment {} at {}.", event.getSegment().getId(), hourStart);
             return;
         }
 
-        applyWeatherToAvoidance(avoidance, weatherFactor.get().getMetadata());
+        applyWeatherToEvent(event, weatherFactor.get().getMetadata());
     }
 
     private List<SegmentExternalFactor> mapResponseToFactors(StreetSegment segment,
@@ -189,7 +189,7 @@ public class WeatherDataProvider implements ExternalDataProvider {
 
     /**
      * Ensures that the repository contains one weather factor for the given segment and hour.
-     * Weather is cached per segment/hour so multiple avoidances in the same time slot can reuse it.
+     * Weather is cached per segment/hour so multiple events in the same time slot can reuse it.
      *
      * @param segment the segment for which weather should exist
      * @param hourStart the inclusive start of the hourly bucket in epoch millis
@@ -207,35 +207,35 @@ public class WeatherDataProvider implements ExternalDataProvider {
     }
 
     /**
-     * Copies weather values from a stored weather factor onto the avoidance entity and, when both
+     * Copies weather values from a stored weather factor onto the segment event and, when both
      * travel direction and wind direction are known, derives the relative wind angle and exposure type.
      *
-     * @param avoidance the avoidance entity being enriched
+     * @param event the segment event being enriched
      * @param metadata weather values previously stored in the external factor metadata
      */
-    private void applyWeatherToAvoidance(SegmentAvoidance avoidance, Map<String, Object> metadata) {
+    private void applyWeatherToEvent(SegmentEvent event, Map<String, Object> metadata) {
         Double temperature2m = asDouble(metadata.get("temperature_2m"));
         Double precipitation = asDouble(metadata.get("precipitation"));
         Double windSpeed10m = asDouble(metadata.get("wind_speed_10m"));
         Double windDirection10m = asDouble(metadata.get("wind_direction_10m"));
         Integer weatherCode = asInteger(metadata.get("weather_code"));
 
-        avoidance.setTemperature2m(temperature2m);
-        avoidance.setPrecipitation(precipitation);
-        avoidance.setWindSpeed10m(windSpeed10m);
-        avoidance.setWindDirection10m(windDirection10m);
-        avoidance.setWeatherCode(weatherCode);
+        event.setTemperature2m(temperature2m);
+        event.setPrecipitation(precipitation);
+        event.setWindSpeed10m(windSpeed10m);
+        event.setWindDirection10m(windDirection10m);
+        event.setWeatherCode(weatherCode);
 
-        Double shortestPathBearing = avoidance.getShortestPathBearingDegrees();
-        if (shortestPathBearing == null || windDirection10m == null) {
-            avoidance.setRelativeWindAngleDegrees(null);
-            avoidance.setWindExposure(null);
+        Double pathBearing = event.getPathBearingDegrees();
+        if (pathBearing == null || windDirection10m == null) {
+            event.setRelativeWindAngleDegrees(null);
+            event.setWindExposure(null);
             return;
         }
 
-        double relativeAngle = calculateRelativeWindAngle(shortestPathBearing, windDirection10m);
-        avoidance.setRelativeWindAngleDegrees(relativeAngle);
-        avoidance.setWindExposure(classifyWindExposure(relativeAngle));
+        double relativeAngle = calculateRelativeWindAngle(pathBearing, windDirection10m);
+        event.setRelativeWindAngleDegrees(relativeAngle);
+        event.setWindExposure(classifyWindExposure(relativeAngle));
     }
 
     /**
@@ -243,7 +243,7 @@ public class WeatherDataProvider implements ExternalDataProvider {
      * the wind is coming from. With this convention, {@code 0} means headwind and
      * {@code 180} means tailwind.
      *
-     * @param travelBearingDegrees the rider's travel direction on the shortest path
+     * @param travelBearingDegrees the rider's travel direction on the relevant path
      * @param windFromDegrees the meteorological wind direction, i.e., where the wind comes from
      * @return the absolute relative angle in degrees in the range {@code [0, 180]}
      */

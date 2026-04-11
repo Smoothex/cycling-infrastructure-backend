@@ -1,9 +1,10 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
-import berlin.tu.cyclinginfrastructurebackend.domain.SegmentAvoidance;
+import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
-import berlin.tu.cyclinginfrastructurebackend.repository.SegmentAvoidanceRepository;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
+import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import com.graphhopper.util.DistanceCalcEarth;
 import com.graphhopper.util.EdgeIteratorState;
@@ -25,13 +26,13 @@ import java.util.stream.Collectors;
 public class StreetSegmentService {
     private static final Logger log = LoggerFactory.getLogger(StreetSegmentService.class);
     private final StreetSegmentRepository repository;
-    private final SegmentAvoidanceRepository avoidanceRepository;
+    private final SegmentEventRepository segmentEventRepository;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public StreetSegmentService(StreetSegmentRepository repository,
-                                SegmentAvoidanceRepository avoidanceRepository) {
+                                SegmentEventRepository segmentEventRepository) {
         this.repository = repository;
-        this.avoidanceRepository = avoidanceRepository;
+        this.segmentEventRepository = segmentEventRepository;
     }
 
     public void updateUsage(EdgeIteratorState edge, GraphHopperService hopperService) {
@@ -49,23 +50,27 @@ public class StreetSegmentService {
         }
     }
 
-    /**
-     * Batch-register avoided edges: upserts missing segments, increments avoidance counts,
-     * and creates temporal SegmentAvoidance records for later correlation with external factors.
-     * The map value carries the shortest-path travel bearing for each avoided edge, which can
-     * differ by ride even for the same physical segment.
-     * Processes edge IDs in sorted (ascending) order to maintain consistent lock ordering
-     * across concurrent transactions, preventing deadlocks.
-     */
     @Transactional
-    public void registerAvoidedEdges(Map<Integer, Double> edgeBearings, Ride ride, GraphHopperService hopperService) {
-        if (edgeBearings == null || edgeBearings.isEmpty()) return;
+    public void registerSegmentEvents(Map<Integer, Double> avoidedEdgeBearings,
+                                      Map<Integer, Double> chosenEdgeBearings,
+                                      Ride ride,
+                                      GraphHopperService hopperService) {
+        boolean hasAvoidedEdges = avoidedEdgeBearings != null && !avoidedEdgeBearings.isEmpty();
+        boolean hasChosenEdges = chosenEdgeBearings != null && !chosenEdgeBearings.isEmpty();
+        if (!hasAvoidedEdges && !hasChosenEdges) return;
 
-        // Sort to avoid deadlocks
-        List<Integer> sortedEdgeIds = new ArrayList<>(edgeBearings.keySet());
+        Set<Integer> allEdgeIds = new HashSet<>();
+        if (hasAvoidedEdges) {
+            allEdgeIds.addAll(avoidedEdgeBearings.keySet());
+        }
+        if (hasChosenEdges) {
+            allEdgeIds.addAll(chosenEdgeBearings.keySet());
+        }
+
+        List<Integer> sortedEdgeIds = new ArrayList<>(allEdgeIds);
         Collections.sort(sortedEdgeIds);
 
-        Long avoidedAt = ride.getStartTime() != null
+        Long eventTimestamp = ride.getStartTime() != null
                 ? ride.getStartTime()
                 : System.currentTimeMillis();
 
@@ -73,16 +78,46 @@ public class StreetSegmentService {
             ensureSegmentExists(edgeId, hopperService);
         }
 
-        Set<Long> longIds = sortedEdgeIds.stream().map(Integer::longValue).collect(Collectors.toSet());
-        repository.bulkIncrementAvoidance(longIds);
+        if (hasAvoidedEdges) {
+            Set<Long> avoidedIds = avoidedEdgeBearings.keySet().stream()
+                    .map(Integer::longValue)
+                    .collect(Collectors.toSet());
+            repository.bulkIncrementAvoidance(avoidedIds);
+        }
 
-        // Create temporal avoidance records
-        List<SegmentAvoidance> avoidanceRecords = new ArrayList<>();
+        if (hasChosenEdges) {
+            Set<Long> chosenIds = chosenEdgeBearings.keySet().stream()
+                    .map(Integer::longValue)
+                    .collect(Collectors.toSet());
+            repository.bulkIncrementPreference(chosenIds);
+        }
+
+        List<SegmentEvent> eventRecords = new ArrayList<>();
         for (Integer edgeId : sortedEdgeIds) {
             StreetSegment segment = repository.getReferenceById(edgeId.longValue());
-            avoidanceRecords.add(SegmentAvoidance.of(segment, ride, avoidedAt, edgeBearings.get(edgeId)));
+
+            if (hasAvoidedEdges && avoidedEdgeBearings.containsKey(edgeId)) {
+                eventRecords.add(SegmentEvent.of(
+                        SegmentEventType.AVOIDANCE,
+                        segment,
+                        ride,
+                        eventTimestamp,
+                        avoidedEdgeBearings.get(edgeId)
+                ));
+            }
+
+            if (hasChosenEdges && chosenEdgeBearings.containsKey(edgeId)) {
+                eventRecords.add(SegmentEvent.of(
+                        SegmentEventType.PREFERENCE,
+                        segment,
+                        ride,
+                        eventTimestamp,
+                        chosenEdgeBearings.get(edgeId)
+                ));
+            }
         }
-        avoidanceRepository.saveAll(avoidanceRecords);
+
+        segmentEventRepository.saveAll(eventRecords);
     }
 
     public void ensureSegmentExists(int edgeId, GraphHopperService hopperService) {

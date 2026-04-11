@@ -1,8 +1,8 @@
 package berlin.tu.cyclinginfrastructurebackend.service.DataProviders;
 
-import berlin.tu.cyclinginfrastructurebackend.domain.SegmentAvoidance;
+import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
-import berlin.tu.cyclinginfrastructurebackend.repository.SegmentAvoidanceRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.BerlinOpenData.RoadClosureDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeApiDataProvider;
@@ -27,7 +27,7 @@ public class ExternalFactorEnrichmentScheduler {
     private static final Logger log = LoggerFactory.getLogger(ExternalFactorEnrichmentScheduler.class);
     private static final long ONE_HOUR_MILLIS = 3_600_000L;
 
-    private final SegmentAvoidanceRepository avoidanceRepository;
+    private final SegmentEventRepository segmentEventRepository;
     private final WeatherDataProvider weatherDataProvider;
     private final RoadClosureDataProvider roadClosureDataProvider;
     private final OhsomeApiDataProvider ohsomeApiDataProvider;
@@ -56,11 +56,11 @@ public class ExternalFactorEnrichmentScheduler {
     @Value("${enrichment.ohsome.delay-between-calls-ms:500}")
     private long ohsomeDelayMs;
 
-    public ExternalFactorEnrichmentScheduler(SegmentAvoidanceRepository avoidanceRepository,
+    public ExternalFactorEnrichmentScheduler(SegmentEventRepository segmentEventRepository,
                                              WeatherDataProvider weatherDataProvider,
                                              RoadClosureDataProvider roadClosureDataProvider,
                                              OhsomeApiDataProvider ohsomeApiDataProvider) {
-        this.avoidanceRepository = avoidanceRepository;
+        this.segmentEventRepository = segmentEventRepository;
         this.weatherDataProvider = weatherDataProvider;
         this.roadClosureDataProvider = roadClosureDataProvider;
         this.ohsomeApiDataProvider = ohsomeApiDataProvider;
@@ -74,14 +74,14 @@ public class ExternalFactorEnrichmentScheduler {
 
         runGenericEnrichment(
                 "Weather",
-                avoidanceRepository::findUnenrichedByWeather,
-                avoidanceRepository.countByWeatherEnriched(false),
+                segmentEventRepository::findUnenrichedByWeather,
+                segmentEventRepository.countByWeatherEnriched(false),
                 weatherBatchSize,
                 weatherDelayMs,
-                weatherDataProvider::enrichAvoidance,
-                avoidance -> {
-                    avoidance.setWeatherEnriched(true);
-                    avoidanceRepository.save(avoidance);
+                weatherDataProvider::enrichEvent,
+                event -> {
+                    event.setWeatherEnriched(true);
+                    segmentEventRepository.save(event);
                 }
         );
     }
@@ -94,14 +94,14 @@ public class ExternalFactorEnrichmentScheduler {
 
         runEnrichment(
                 "Berlin Open Data",
-                avoidanceRepository::findUnenrichedByBerlinOpenData,
-                avoidanceRepository.countByBerlinOpenDataEnriched(false),
+                segmentEventRepository::findUnenrichedByBerlinOpenData,
+                segmentEventRepository.countByBerlinOpenDataEnriched(false),
                 berlinOpenDataBatchSize,
                 0,
                 roadClosureDataProvider::enrichSegment,
-                avoidance -> {
-                    avoidance.setBerlinOpenDataEnriched(true);
-                    avoidanceRepository.save(avoidance);
+                event -> {
+                    event.setBerlinOpenDataEnriched(true);
+                    segmentEventRepository.save(event);
                 }
         );
     }
@@ -114,14 +114,14 @@ public class ExternalFactorEnrichmentScheduler {
 
         runGenericEnrichment(
                 "Ohsome API",
-                avoidanceRepository::findUnenrichedByOhsome,
-                avoidanceRepository.countByOhsomeEnriched(false),
+                segmentEventRepository::findUnenrichedByOhsome,
+                segmentEventRepository.countByOhsomeEnriched(false),
                 ohsomeBatchSize,
                 ohsomeDelayMs,
-                ohsomeApiDataProvider::enrichAvoidance,
-                avoidance -> {
-                    avoidance.setOhsomeEnriched(true);
-                    avoidanceRepository.save(avoidance);
+                ohsomeApiDataProvider::enrichEvent,
+                event -> {
+                    event.setOhsomeEnriched(true);
+                    segmentEventRepository.save(event);
                 }
         );
     }
@@ -129,29 +129,29 @@ public class ExternalFactorEnrichmentScheduler {
     // ---- Shared batch-processing logic ----
 
     /**
-     * Processes avoidances in batches, calling the provider
+     * Processes segment events in batches, calling the provider
      * for each one and marking it as enriched on success.
      *
      * @param label          human-readable name for logging
-     * @param batchFetcher   function that returns the next batch of unenriched avoidances
-     * @param totalUnenriched count of remaining avoidances
-     * @param batchSize      how many avoidances to fetch per batch
+     * @param batchFetcher   function that returns the next batch of unenriched events
+     * @param totalUnenriched count of remaining events
+     * @param batchSize      how many events to fetch per batch
      * @param delayMs        pause between individual calls
      * @param enrichFn       the provider's enrichSegment method reference
-     * @param markDone       callback to mark the avoidance as enriched and persist
+     * @param markDone       callback to mark the event as enriched and persist
      */
     private void runEnrichment(String label,
-                               Function<Pageable, List<SegmentAvoidance>> batchFetcher,
+                               Function<Pageable, List<SegmentEvent>> batchFetcher,
                                long totalUnenriched,
                                int batchSize,
                                long delayMs,
                                TriConsumer<StreetSegment, Long, Long> enrichFn,
-                               Consumer<SegmentAvoidance> markDone) {
+                               Consumer<SegmentEvent> markDone) {
         runGenericEnrichment(label, batchFetcher, totalUnenriched, batchSize, delayMs,
-            avoidance -> {
-                StreetSegment segment = avoidance.getSegment();
-                Long avoidedAt = avoidance.getAvoidedAt();
-                long hourStart = avoidedAt - (avoidedAt % ONE_HOUR_MILLIS);
+            event -> {
+                StreetSegment segment = event.getSegment();
+                Long eventTimestamp = event.getEventTimestamp();
+                long hourStart = eventTimestamp - (eventTimestamp % ONE_HOUR_MILLIS);
                 enrichFn.accept(segment, hourStart, hourStart + ONE_HOUR_MILLIS);
             },
             markDone
@@ -159,33 +159,33 @@ public class ExternalFactorEnrichmentScheduler {
     }
 
     /**
-     * Generic enrichment that processes SegmentAvoidance objects directly.
+     * Generic enrichment that processes SegmentEvent objects directly.
      */
     private void runGenericEnrichment(String label,
-                               Function<Pageable, List<SegmentAvoidance>> batchFetcher,
+                               Function<Pageable, List<SegmentEvent>> batchFetcher,
                                long totalUnenriched,
                                int batchSize,
                                long delayMs,
-                               Consumer<SegmentAvoidance> enrichFn,
-                               Consumer<SegmentAvoidance> markDone) {
+                               Consumer<SegmentEvent> enrichFn,
+                               Consumer<SegmentEvent> markDone) {
         if (totalUnenriched == 0) {
-            log.debug("No unenriched avoidances for {}.", label);
+            log.debug("No unenriched events for {}.", label);
             return;
         }
 
-        log.info("=== {} enrichment started. {} unenriched avoidances. ===", label, totalUnenriched);
+        log.info("=== {} enrichment started. {} unenriched events. ===", label, totalUnenriched);
         Instant runStart = Instant.now();
         int totalProcessed = 0;
         int totalErrors = 0;
 
         while (true) {
-            List<SegmentAvoidance> batch = batchFetcher.apply(PageRequest.of(0, batchSize));
+            List<SegmentEvent> batch = batchFetcher.apply(PageRequest.of(0, batchSize));
             if (batch.isEmpty()) break;
 
-            for (SegmentAvoidance avoidance : batch) {
+            for (SegmentEvent event : batch) {
                 try {
-                    enrichFn.accept(avoidance);
-                    markDone.accept(avoidance);
+                    enrichFn.accept(event);
+                    markDone.accept(event);
                     totalProcessed++;
 
                     if (delayMs > 0) {
@@ -196,7 +196,7 @@ public class ExternalFactorEnrichmentScheduler {
                     log.warn("{} enrichment interrupted.", label);
                     return;
                 } catch (Exception e) {
-                    log.error("Failed to enrich avoidance {} ({}): {}", avoidance.getId(), label, e.getMessage());
+                    log.error("Failed to enrich event {} ({}): {}", event.getId(), label, e.getMessage());
                     totalErrors++;
                 }
             }

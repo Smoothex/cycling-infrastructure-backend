@@ -10,7 +10,9 @@ import lombok.Setter;
 import org.locationtech.jts.geom.LineString;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Entity
@@ -72,12 +74,13 @@ public class Ride {
     private List<Integer> shortestPathEdgeIds = new ArrayList<>();
 
     @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "ride_avoided_edges", joinColumns = @JoinColumn(name = "ride_id"))
-    @Column(name = "edge_id")
-    private List<Integer> avoidedEdgeIds = new ArrayList<>();
+    @CollectionTable(
+            name = "ride_edge_bearings",
+            joinColumns = @JoinColumn(name = "ride_id"),
+            indexes = @Index(name = "idx_ride_edge_bearing_edge_id", columnList = "edge_id")
+    )
+    @MapKeyColumn(name = "edge_id")
+    @Column(name = "bearing_degrees")
+    private Map<Integer, Double> traversedEdgeBearings = new HashMap<>();
 
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "ride_chosen_edges", joinColumns = @JoinColumn(name = "ride_id"))
-    @Column(name = "edge_id")
-    private List<Integer> chosenEdgeIds = new ArrayList<>();
 }

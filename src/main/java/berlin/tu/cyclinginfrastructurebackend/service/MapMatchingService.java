@@ -4,6 +4,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
+import berlin.tu.cyclinginfrastructurebackend.util.BearingCalculator;
 import com.graphhopper.matching.EdgeMatch;
 import com.graphhopper.matching.MatchResult;
 import com.graphhopper.matching.Observation;
@@ -21,7 +22,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -56,11 +59,13 @@ public class MapMatchingService {
             updateRideTrajectory(ride, result);
 
             // Extract edge IDs
-            List<EdgeIteratorState> edges = result.getEdgeMatches().stream()
+            List<EdgeMatch> edgeMatches = result.getEdgeMatches();
+            List<EdgeIteratorState> edges = edgeMatches.stream()
                     .map(EdgeMatch::getEdgeState)
                     .collect(Collectors.toList());
 
             ride.setTraversedEdgeIds(edges.stream().map(EdgeIteratorState::getEdge).collect(Collectors.toList()));
+            ride.setTraversedEdgeBearings(computeEdgeBearings(edgeMatches));
 
             // Update segments (Sort to prevent deadlocks)
             edges.sort(Comparator.comparingLong(EdgeIteratorState::getEdge));
@@ -106,5 +111,43 @@ public class MapMatchingService {
     private boolean isValidCoordinate(double lat, double lon) {
         return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
                 && lat != 0.0 && lon != 0.0;
+    }
+
+    /**
+     * Computes compass bearings for each edge in the match result.
+     * <p>
+     * This method is called during map matching while the EdgeMatch objects are still available.
+     * The EdgeIteratorState from EdgeMatch.getEdgeState() returns geometry in the direction of
+     * traversal, so the bearing accurately reflects the rider's travel direction without needing
+     * any reversal logic.
+     *
+     * @param edgeMatches the list of edge matches from the map matching result
+     * @return a map from edge ID to bearing in degrees (0-360), preserving traversal order;
+     *         edges with invalid geometry will have null bearings
+     */
+    private Map<Integer, Double> computeEdgeBearings(List<EdgeMatch> edgeMatches) {
+        Map<Integer, Double> bearings = new LinkedHashMap<>();
+
+        for (EdgeMatch match : edgeMatches) {
+            EdgeIteratorState edgeState = match.getEdgeState();
+            int edgeId = edgeState.getEdge();
+
+            // Skip if we've already computed a bearing for this edge (can happen with loops)
+            if (bearings.containsKey(edgeId)) {
+                continue;
+            }
+
+            PointList geometry = edgeState.fetchWayGeometry(FetchMode.ALL);
+            if (geometry == null || geometry.size() < 2) {
+                bearings.put(edgeId, null);
+                continue;
+            }
+
+            // Geometry is already in traversal direction, so compute bearing from start to end
+            Double bearing = BearingCalculator.calculateBearing(geometry, 0, geometry.size() - 1);
+            bearings.put(edgeId, bearing);
+        }
+
+        return bearings;
     }
 }
