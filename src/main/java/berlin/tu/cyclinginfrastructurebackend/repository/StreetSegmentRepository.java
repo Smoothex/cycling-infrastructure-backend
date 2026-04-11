@@ -29,9 +29,19 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     void bulkIncrementAvoidance(Collection<Long> ids);
 
     @Modifying
+    @Transactional
+    @Query("UPDATE StreetSegment s SET s.preferenceCount = s.preferenceCount + 1, " +
+            "s.preferenceRatio = CAST(s.preferenceCount + 1 AS double) / (s.usageCount + s.preferenceCount + 1) " +
+            "WHERE s.id IN :ids")
+    void bulkIncrementPreference(Collection<Long> ids);
+
+    @Modifying
     @Query(value = """
-        INSERT INTO street_segments (id, street_name, geometry, usage_count, avoidance_count, avoidance_ratio, surface)
-        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL, :surface)
+        INSERT INTO street_segments (
+            id, street_name, geometry, usage_count, avoidance_count, avoidance_ratio,
+            preference_count, preference_ratio, surface
+        )
+        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL, 0, NULL, :surface)
         ON CONFLICT (id) DO UPDATE SET surface = EXCLUDED.surface
     """, nativeQuery = true)
     void upsertSegment(Long id, String name, Object geom, String surface);

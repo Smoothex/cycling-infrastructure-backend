@@ -113,6 +113,8 @@ public class SegmentController {
                 segment.getUsageCount(),
                 segment.getAvoidanceCount(),
                 segment.getAvoidanceRatio(),
+                segment.getPreferenceCount(),
+                segment.getPreferenceRatio(),
                 nearbyIncidents.size(),
                 breakdown,
                 factors

@@ -1,6 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome;
 
-import berlin.tu.cyclinginfrastructurebackend.domain.SegmentAvoidance;
+import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.locationtech.jts.geom.Coordinate;
@@ -35,10 +35,10 @@ public class OhsomeApiDataProvider {
         objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
-    public void enrichAvoidance(SegmentAvoidance avoidance) {
-        Point centroid = avoidance.getSegment().getGeometry().getCentroid();
+    public void enrichEvent(SegmentEvent event) {
+        Point centroid = event.getSegment().getGeometry().getCentroid();
         Coordinate coord = centroid.getCoordinate();
-        String time = ISO_FORMATTER.format(Instant.ofEpochMilli(avoidance.getAvoidedAt()));
+        String time = ISO_FORMATTER.format(Instant.ofEpochMilli(event.getEventTimestamp()));
 
         // Query ohsome API for elements around the centroid at the specific time
         String bcircles = String.format(java.util.Locale.ROOT, "%f,%f,15", coord.x, coord.y); // 15m radius
@@ -54,25 +54,24 @@ public class OhsomeApiDataProvider {
                     .retrieve()
                     .body(String.class);
 
-            log.info("Ohsome API response for avoidance {}: {}", avoidance.getId(), responseBody);
+            log.info("Ohsome API response for event {}: {}", event.getId(), responseBody);
 
             OhsomeResponse response = objectMapper.readValue(responseBody, OhsomeResponse.class);
 
             if (response != null && response.features != null && !response.features.isEmpty()) {
-                Feature feature = withMatchingStreetName(response.features, avoidance.getSegment());
+                Feature feature = withMatchingStreetName(response.features, event.getSegment());
 
                 if (feature.properties != null) {
                     Map<String, Object> props = feature.properties;
-                    avoidance.setSurface((String) props.get("surface"));
-                    avoidance.setSmoothness((String) props.get("smoothness"));
-                    avoidance.setLit((String) props.get("lit"));
-                    avoidance.setHighway((String) props.get("highway"));
-                    avoidance.setMaxspeed(Integer.parseInt((String) props.get("maxspeed")));
-                    avoidance.setCycleway((String) props.get("cycleway"));
+                    event.setSurface((String) props.get("surface"));
+                    event.setSmoothness((String) props.get("smoothness"));
+                    event.setLit((String) props.get("lit"));
+                    event.setHighway((String) props.get("highway"));
+                    event.setCycleway((String) props.get("cycleway"));
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to query ohsome API for avoidance {}: {}", avoidance.getId(), e.getMessage());
+            log.error("Failed to query ohsome API for event {}: {}", event.getId(), e.getMessage());
             throw new RuntimeException("Ohsome API call failed", e);
         }
     }
