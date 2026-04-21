@@ -39,12 +39,13 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     @Query(value = """
         INSERT INTO street_segments (
             id, street_name, geometry, usage_count, avoidance_count, avoidance_ratio,
-            preference_count, preference_ratio, surface
+            preference_count, preference_ratio, gradient_percent
         )
-        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL, 0, NULL, :surface)
-        ON CONFLICT (id) DO UPDATE SET surface = EXCLUDED.surface
+        VALUES (:id, :name, CAST(:geom AS geometry), 0, 0, NULL, 0, NULL, :gradientPercent)
+        ON CONFLICT (id) DO UPDATE SET
+            gradient_percent = COALESCE(EXCLUDED.gradient_percent, street_segments.gradient_percent)
     """, nativeQuery = true)
-    void upsertSegment(Long id, String name, Object geom, String surface);
+    void upsertSegment(Long id, String name, Object geom, Double gradientPercent);
 
     /** Segments with highest avoidance ratio, filtered by minimum total observations to reduce noise. */
     @Query("SELECT s FROM StreetSegment s " +

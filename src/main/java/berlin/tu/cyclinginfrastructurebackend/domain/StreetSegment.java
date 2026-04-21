@@ -45,8 +45,8 @@ public class StreetSegment {
     @OneToMany(mappedBy = "segment", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<SegmentExternalFactor> externalFactors = new ArrayList<>();
 
-    @Column(name = "surface")
-    private String surface;
+    @Column(name = "gradient_percent")
+    private Double gradientPercent;
 
     public void incrementUsage() {
         this.usageCount++;

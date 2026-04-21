@@ -43,9 +43,9 @@ public class StreetSegmentService {
             String name = resolveEdgeName(edge, hopperService);
             PointList points = edge.fetchWayGeometry(FetchMode.ALL);
             Coordinate[] coords = toCoordinates(points);
-            String surface = hopperService.getSurface((int) edgeId);
+            Double gradient = hopperService.getGradientPercent((int) edgeId);
 
-            repository.upsertSegment(edgeId, name, geometryFactory.createLineString(coords), surface);
+            repository.upsertSegment(edgeId, name, geometryFactory.createLineString(coords), gradient);
             repository.incrementUsage(edgeId);
         }
     }
@@ -128,10 +128,10 @@ public class StreetSegmentService {
             String name = resolveEdgeName(edge, hopperService);
             PointList points = edge.fetchWayGeometry(FetchMode.ALL);
             Coordinate[] coords = toCoordinates(points);
-            String surface = hopperService.getSurface(edgeId);
+            Double gradient = hopperService.getGradientPercent(edgeId);
 
             if (coords.length >= 2) {
-                repository.upsertSegment((long) edgeId, name, geometryFactory.createLineString(coords), surface);
+                repository.upsertSegment((long) edgeId, name, geometryFactory.createLineString(coords), gradient);
             }
         }
     }
