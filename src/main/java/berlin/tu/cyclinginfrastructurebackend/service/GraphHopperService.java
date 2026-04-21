@@ -6,12 +6,11 @@ import com.graphhopper.json.Statement;
 import com.graphhopper.matching.MapMatching;
 import com.graphhopper.matching.MatchResult;
 import com.graphhopper.matching.Observation;
+import com.graphhopper.reader.dem.SRTMProvider;
 import com.graphhopper.util.*;
 import com.graphhopper.GHRequest;
 import com.graphhopper.GHResponse;
 import com.graphhopper.ResponsePath;
-import com.graphhopper.routing.ev.Surface;
-import com.graphhopper.routing.ev.EnumEncodedValue;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
@@ -38,6 +37,9 @@ public class GraphHopperService {
     @Value("${graphhopper.graph.location}")
     private String graphLocation;
 
+    @Value("${graphhopper.elevation.cache_dir}")
+    private String elevationCacheDir;
+
     @Getter
     private GraphHopper hopper;
     private final ThreadLocal<MapMatching> mapMatchingThreadLocal = new ThreadLocal<>();
@@ -54,6 +56,8 @@ public class GraphHopperService {
         hopper = new GraphHopper();
         hopper.setOSMFile(osmFile);
         hopper.setGraphHopperLocation(graphLocation);
+        hopper.setElevation(true);
+        hopper.setElevationProvider(new SRTMProvider(elevationCacheDir));
 
         hopper.setEncodedValuesString("road_class,road_access,max_speed,road_environment,surface");
 
@@ -93,14 +97,22 @@ public class GraphHopperService {
         return rsp.getBest();
     }
 
-    public String getSurface(int edgeId) {
+    /** Computes average gradient (%) for an edge. Positive = uphill, negative = downhill. */
+    public Double getGradientPercent(int edgeId) {
         EdgeIteratorState edge = hopper.getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
-        if (edge == null) return null;
+        PointList points = edge.fetchWayGeometry(FetchMode.ALL);
+        if (!points.is3D()) {
+            log.warn("Edge {} has no elevation data (is3D=false)", edgeId);
+            return null;
+        }
 
-        EnumEncodedValue<Surface> surfaceEnc = hopper.getEncodingManager().getEnumEncodedValue(Surface.KEY, Surface.class);
-        Surface surface = edge.get(surfaceEnc);
+        double startElevation = points.getEle(0);
+        double endElevation = points.getEle(points.size() - 1);
+        double distance = edge.getDistance();
 
-        return surface.toString();
+        if (distance < 1.0) return 0.0;
+
+        return ((endElevation - startElevation) / distance) * 100.0;
     }
 
 
