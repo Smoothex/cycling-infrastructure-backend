@@ -8,6 +8,7 @@ import berlin.tu.cyclinginfrastructurebackend.util.BearingCalculator;
 import com.graphhopper.matching.EdgeMatch;
 import com.graphhopper.matching.MatchResult;
 import com.graphhopper.matching.Observation;
+import com.graphhopper.util.DistanceCalcEarth;
 import com.graphhopper.util.EdgeIteratorState;
 import com.graphhopper.util.FetchMode;
 import com.graphhopper.util.PointList;
@@ -66,6 +67,7 @@ public class MapMatchingService {
 
             ride.setTraversedEdgeIds(edges.stream().map(EdgeIteratorState::getEdge).collect(Collectors.toList()));
             ride.setTraversedEdgeBearings(computeEdgeBearings(edgeMatches));
+            ride.setTraversedEdgeTimestamps(computeEdgeTimestamps(edgeMatches, validPoints));
 
             // Update segments (Sort to prevent deadlocks)
             edges.sort(Comparator.comparingLong(EdgeIteratorState::getEdge));
@@ -149,5 +151,64 @@ public class MapMatchingService {
         }
 
         return bearings;
+    }
+
+    /**
+     * Computes timestamps for each edge by finding the closest RidePoint to each edge's geometry.
+     * Uses spatial distance to match GPS points to map-matched edges.
+     *
+     * @param edgeMatches the list of edge matches from map matching
+     * @param ridePoints the original GPS points with timestamps
+     * @return a map from edge ID to timestamp (milliseconds since epoch)
+     */
+    private Map<Integer, Long> computeEdgeTimestamps(List<EdgeMatch> edgeMatches,
+                                                      List<RidePoint> ridePoints) {
+        Map<Integer, Long> timestamps = new LinkedHashMap<>();
+        DistanceCalcEarth distCalc = new DistanceCalcEarth();
+
+        for (EdgeMatch match : edgeMatches) {
+            EdgeIteratorState edgeState = match.getEdgeState();
+            int edgeId = edgeState.getEdge();
+
+            // Skip if already computed
+            if (timestamps.containsKey(edgeId)) {
+                continue;
+            }
+
+            // Get edge geometry
+            PointList geometry = edgeState.fetchWayGeometry(FetchMode.ALL);
+            if (geometry == null || geometry.isEmpty()) {
+                timestamps.put(edgeId, null);
+                continue;
+            }
+
+            // Use edge midpoint
+            int midIdx = geometry.size() / 2;
+            double edgeLat = geometry.getLat(midIdx);
+            double edgeLon = geometry.getLon(midIdx);
+
+            // Find closest RidePoint
+            RidePoint closestPoint = null;
+            double minDistance = Double.MAX_VALUE;
+
+            for (RidePoint point : ridePoints) {
+                if (point.getLocation() == null || point.getTimestamp() == null) {
+                    continue;
+                }
+
+                double pointLat = point.getLocation().getY();
+                double pointLon = point.getLocation().getX();
+                double distance = distCalc.calcDist(edgeLat, edgeLon, pointLat, pointLon);
+
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = point;
+                }
+            }
+
+            timestamps.put(edgeId, closestPoint != null ? closestPoint.getTimestamp() : null);
+        }
+
+        return timestamps;
     }
 }

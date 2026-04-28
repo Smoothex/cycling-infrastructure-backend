@@ -83,4 +83,14 @@ public class Ride {
     @Column(name = "bearing_degrees")
     private Map<Integer, Double> traversedEdgeBearings = new HashMap<>();
 
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(
+            name = "ride_edge_timestamps",
+            joinColumns = @JoinColumn(name = "ride_id"),
+            indexes = @Index(name = "idx_ride_edge_timestamp_edge_id", columnList = "edge_id")
+    )
+    @MapKeyColumn(name = "edge_id")
+    @Column(name = "timestamp")
+    private Map<Integer, Long> traversedEdgeTimestamps = new HashMap<>();
+
 }

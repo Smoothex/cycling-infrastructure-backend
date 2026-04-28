@@ -52,7 +52,9 @@ public class StreetSegmentService {
 
     @Transactional
     public void registerSegmentEvents(Map<Integer, Double> avoidedEdgeBearings,
+                                      Map<Integer, Long> avoidedEdgeTimestamps,
                                       Map<Integer, Double> chosenEdgeBearings,
+                                      Map<Integer, Long> chosenEdgeTimestamps,
                                       Ride ride,
                                       GraphHopperService hopperService) {
         boolean hasAvoidedEdges = avoidedEdgeBearings != null && !avoidedEdgeBearings.isEmpty();
@@ -69,10 +71,6 @@ public class StreetSegmentService {
 
         List<Integer> sortedEdgeIds = new ArrayList<>(allEdgeIds);
         Collections.sort(sortedEdgeIds);
-
-        Long eventTimestamp = ride.getStartTime() != null
-                ? ride.getStartTime()
-                : System.currentTimeMillis();
 
         for (Integer edgeId : sortedEdgeIds) {
             ensureSegmentExists(edgeId, hopperService);
@@ -97,21 +95,31 @@ public class StreetSegmentService {
             StreetSegment segment = repository.getReferenceById(edgeId.longValue());
 
             if (hasAvoidedEdges && avoidedEdgeBearings.containsKey(edgeId)) {
+                // fallback to ride start time
+                Long edgeTimestamp = avoidedEdgeTimestamps != null
+                        ? avoidedEdgeTimestamps.get(edgeId)
+                        : ride.getStartTime();
+
                 eventRecords.add(SegmentEvent.of(
                         SegmentEventType.AVOIDANCE,
                         segment,
                         ride,
-                        eventTimestamp,
+                        edgeTimestamp,
                         avoidedEdgeBearings.get(edgeId)
                 ));
             }
 
             if (hasChosenEdges && chosenEdgeBearings.containsKey(edgeId)) {
+                // fallback to ride start time
+                Long edgeTimestamp = chosenEdgeTimestamps != null
+                        ? chosenEdgeTimestamps.get(edgeId)
+                        : ride.getStartTime();
+                
                 eventRecords.add(SegmentEvent.of(
                         SegmentEventType.PREFERENCE,
                         segment,
                         ride,
-                        eventTimestamp,
+                        edgeTimestamp,
                         chosenEdgeBearings.get(edgeId)
                 ));
             }

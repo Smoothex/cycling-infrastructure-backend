@@ -53,7 +53,6 @@ public class SegmentEvent {
     @Enumerated(EnumType.STRING)
     private DayOfWeek dayOfWeek;
 
-    /** Hour in Berlin local time (0-23), for quick time-of-day aggregation */
     private Integer hourOfDay;
 
     private boolean weatherEnriched = false;
