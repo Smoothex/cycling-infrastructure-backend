@@ -7,6 +7,9 @@ import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import berlin.tu.cyclinginfrastructurebackend.util.BearingCalculator;
 import com.graphhopper.ResponsePath;
+import com.graphhopper.util.DistanceCalcEarth;
+import com.graphhopper.util.EdgeIteratorState;
+import com.graphhopper.util.FetchMode;
 import com.graphhopper.util.PointList;
 import com.graphhopper.util.details.PathDetail;
 import org.locationtech.jts.geom.Coordinate;
@@ -123,14 +126,23 @@ public class DetourAnalysisService {
                 Map<Integer, Double> avoidedEdgeBearings = buildEdgeBearingsFromShortestPath(
                         shortestPath,
                         avoidedEdges);
+                Map<Integer, Long> avoidedEdgeTimestamps = computeAvoidedEdgeTimestamps(avoidedEdges, ride);
+                
                 // Use pre-computed bearings from map matching instead of inferring direction
                 Map<Integer, Double> chosenEdgeBearings = filterEdgeBearings(
                         ride.getTraversedEdgeBearings(),
                         chosenEdges
                 );
+                Map<Integer, Long> chosenEdgeTimestamps = filterEdgeTimestamps(
+                        ride.getTraversedEdgeTimestamps(),
+                        chosenEdges
+                );
+                
                 streetSegmentService.registerSegmentEvents(
                         avoidedEdgeBearings,
+                        avoidedEdgeTimestamps,
                         chosenEdgeBearings,
+                        chosenEdgeTimestamps,
                         ride,
                         graphHopperService
                 );
@@ -271,10 +283,8 @@ public class DetourAnalysisService {
     /**
      * Filters pre-computed edge bearings to include only the specified edge IDs.
      * <p>
-     * This replaces the previous direction-inference logic that was needed when bearings
-     * were not computed during map matching. Now that bearings are pre-computed in
-     * {@link MapMatchingService#processRide}, this method simply extracts the relevant
-     * subset of bearings for the chosen edges.
+     * Bearings are pre-computed in {@link MapMatchingService#processRide},
+     * this method simply extracts the relevant subset of bearings for the chosen edges.
      *
      * @param allBearings the complete map of edge ID to bearing from the ride
      * @param edgeIds     the subset of edge IDs to include in the result
@@ -291,5 +301,92 @@ public class DetourAnalysisService {
             result.put(edgeId, allBearings.getOrDefault(edgeId, null));
         }
         return result;
+    }
+
+    /**
+     * Filters edge timestamps to include only specified edge IDs.
+     *
+     * @param allTimestamps the complete map of edge ID to timestamp from the ride
+     * @param edgeIds       the subset of edge IDs to include in the result
+     * @return a map containing only the specified edges with their timestamps;
+     *         edges not found in allTimestamps will have null values
+     */
+    private Map<Integer, Long> filterEdgeTimestamps(Map<Integer, Long> allTimestamps, Set<Integer> edgeIds) {
+        if (allTimestamps == null || edgeIds == null || edgeIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<Integer, Long> result = new LinkedHashMap<>();
+        for (Integer edgeId : edgeIds) {
+            result.put(edgeId, allTimestamps.getOrDefault(edgeId, null));
+        }
+        return result;
+    }
+
+    /**
+     * Computes timestamps for avoided edges by finding the closest point on the actual trajectory.
+     * Since these edges weren't traversed, this method estimates when the rider was nearest to them.
+     *
+     * @param avoidedEdges the set of edge IDs that were avoided
+     * @param ride the ride containing trajectory and timestamps
+     * @return map of edge ID to estimated timestamp
+     */
+    private Map<Integer, Long> computeAvoidedEdgeTimestamps(Set<Integer> avoidedEdges, Ride ride) {
+        Map<Integer, Long> timestamps = new LinkedHashMap<>();
+        DistanceCalcEarth distCalc = new DistanceCalcEarth();
+
+        // Get ride points sorted by timestamp
+        List<RidePoint> sortedPoints = ride.getRidePoints().stream()
+                .filter(p -> p.getLocation() != null && p.getTimestamp() != null)
+                .sorted(Comparator.comparingLong(RidePoint::getTimestamp))
+                .toList();
+
+        if (sortedPoints.isEmpty()) {
+            // fallback start time
+            for (Integer edgeId : avoidedEdges) {
+                timestamps.put(edgeId, ride.getStartTime());
+            }
+            return timestamps;
+        }
+
+        for (Integer edgeId : avoidedEdges) {
+            EdgeIteratorState edge = graphHopperService.getHopper().getBaseGraph()
+                    .getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
+
+            if (edge == null) {
+                timestamps.put(edgeId, ride.getStartTime());
+                continue;
+            }
+
+            PointList geometry = edge.fetchWayGeometry(FetchMode.ALL);
+            if (geometry == null || geometry.isEmpty()) {
+                timestamps.put(edgeId, ride.getStartTime());
+                continue;
+            }
+
+            // Use edge midpoint
+            int midIdx = geometry.size() / 2;
+            double edgeLat = geometry.getLat(midIdx);
+            double edgeLon = geometry.getLon(midIdx);
+
+            // Find closest RidePoint
+            RidePoint closestPoint = null;
+            double minDistance = Double.MAX_VALUE;
+
+            for (RidePoint point : sortedPoints) {
+                double pointLat = point.getLocation().getY();
+                double pointLon = point.getLocation().getX();
+                double distance = distCalc.calcDist(edgeLat, edgeLon, pointLat, pointLon);
+
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = point;
+                }
+            }
+
+            timestamps.put(edgeId, closestPoint != null ? closestPoint.getTimestamp() : ride.getStartTime());
+        }
+
+        return timestamps;
     }
 }
