@@ -2,6 +2,8 @@ package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Point;
@@ -63,11 +65,18 @@ public class OhsomeApiDataProvider {
 
                 if (feature.properties != null) {
                     Map<String, Object> props = feature.properties;
+                    
+                    // Normalize deprecated OSM tags before extraction
+                    normalizeCyclewayTags(props);
+                    
+                    // Extract basic attributes
                     event.setSurface((String) props.get("surface"));
                     event.setSmoothness((String) props.get("smoothness"));
                     event.setLit((String) props.get("lit"));
                     event.setHighway((String) props.get("highway"));
-                    event.setCycleway((String) props.get("cycleway"));
+                    
+                    // Extract cycleway information
+                    extractCyclewayInfo(props, event);
                 }
             }
         } catch (Exception e) {
@@ -82,6 +91,139 @@ public class OhsomeApiDataProvider {
                         segment.getStreetName().equals(f.properties.get("name")))
                 .findFirst()
                 .orElse(features.isEmpty() ? null : features.getFirst()); // Fallback
+    }
+
+    /**
+     * Normalizes deprecated/discouraged OSM cycleway tags to modern equivalents.    <p>
+     * See {@link <a href="https://wiki.openstreetmap.org/wiki/Key:cycleway#Deprecated_or_discouraged_tags">Key:cycleway in OSM Wiki</a>}
+     */
+    private void normalizeCyclewayTags(Map<String, Object> props) {
+        String cycleway = (String) props.get("cycleway");
+        
+        if (cycleway == null) return;
+        
+        switch (cycleway) {
+            case "opposite":
+                // cycleway:opposite -> oneway:bicycle=no + cycleway=no
+                if (!props.containsKey("oneway:bicycle")) {
+                    props.put("oneway:bicycle", "no");
+                }
+                props.put("cycleway", "no");
+                break;
+                
+            case "opposite_lane":
+                // cycleway:opposite_lane -> oneway:bicycle=no + cycleway=lane
+                if (!props.containsKey("oneway:bicycle")) {
+                    props.put("oneway:bicycle", "no");
+                }
+                props.put("cycleway", "lane");
+                break;
+                
+            case "opposite_track":
+                // cycleway:opposite_track -> oneway:bicycle=no + cycleway=track
+                if (!props.containsKey("oneway:bicycle")) {
+                    props.put("oneway:bicycle", "no");
+                }
+                props.put("cycleway", "track");
+                break;
+        }
+    }
+
+    private void extractCyclewayInfo(Map<String, Object> props, SegmentEvent event) {
+        String cyclewayValue = null;
+        CyclewayLocation location = CyclewayLocation.NONE;
+        
+        if (props.containsKey("cycleway:both")) {
+            cyclewayValue = (String) props.get("cycleway:both");
+            location = CyclewayLocation.BOTH;
+        } else if (props.containsKey("cycleway:right")) {
+            cyclewayValue = (String) props.get("cycleway:right");
+            location = CyclewayLocation.RIGHT;
+        } else if (props.containsKey("cycleway:left")) {
+            cyclewayValue = (String) props.get("cycleway:left");
+            location = CyclewayLocation.LEFT;
+        } else if (props.containsKey("cycleway")) {
+            cyclewayValue = (String) props.get("cycleway");
+            location = CyclewayLocation.UNKNOWN;
+        }
+        
+        // Map to enum
+        CyclewayType type = cyclewayValue != null
+            ? CyclewayType.fromOsmValue(cyclewayValue)
+            : null;
+        
+        event.setCyclewayType(type);
+        event.setCyclewayLocation(location);
+
+        // Extract surface and width
+        if (type != null && type != CyclewayType.NO) {
+            String surface = extractCyclewaySurface(props, location);
+            event.setCyclewaySurface(surface);
+            
+            Double width = extractCyclewayWidth(props, location);
+            event.setCyclewayWidth(width);
+        }
+        
+        // Extract bicycle oneway information
+        Boolean bicycleOneway = extractBicycleOneway(props);
+        event.setBicycleOneway(bicycleOneway);
+    }
+
+    private String extractCyclewaySurface(Map<String, Object> props, CyclewayLocation location) {
+        String surface = switch (location) {
+            case BOTH -> (String) props.get("cycleway:both:surface");
+            case RIGHT -> (String) props.get("cycleway:right:surface");
+            case LEFT -> (String) props.get("cycleway:left:surface");
+            case UNKNOWN -> (String) props.get("cycleway:surface");
+            default -> null;
+        };
+
+        // Fallback to road surface if no cycleway-specific surface
+        if (surface == null) {
+            surface = (String) props.get("surface");
+        }
+        
+        return surface;
+    }
+
+    private Double extractCyclewayWidth(Map<String, Object> props, CyclewayLocation location) {
+        String widthStr = switch (location) {
+            case BOTH -> (String) props.get("cycleway:both:width");
+            case RIGHT -> (String) props.get("cycleway:right:width");
+            case LEFT -> (String) props.get("cycleway:left:width");
+            case UNKNOWN -> (String) props.get("cycleway:width");
+            default -> null;
+        };
+
+        if (widthStr != null) {
+            try {
+                return Double.parseDouble(widthStr);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid cycleway width value: {}", widthStr);
+            }
+        }
+        
+        return null;
+    }
+
+    private Boolean extractBicycleOneway(Map<String, Object> props) {
+        String onewayBicycle = (String) props.get("oneway:bicycle");
+        
+        if (onewayBicycle == null) {
+            return null; // Not specified
+        }
+        
+        // bike riders must follow one direction
+        if ("yes".equals(onewayBicycle)) {
+            return true;
+        }
+        
+        // bike riders can go in both directions
+        if ("no".equals(onewayBicycle) || "-1".equals(onewayBicycle)) {
+            return false;
+        }
+        
+        return null;
     }
 
     // DTOs for JSON parsing
