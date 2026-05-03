@@ -1,5 +1,7 @@
 package berlin.tu.cyclinginfrastructurebackend.domain;
 
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import jakarta.persistence.*;
@@ -22,7 +24,8 @@ import java.util.UUID;
 @Table(name = "segment_events", indexes = {
         @Index(name = "idx_event_segment", columnList = "segment_id"),
         @Index(name = "idx_event_timestamp", columnList = "eventTimestamp"),
-        @Index(name = "idx_event_type", columnList = "eventType")
+        @Index(name = "idx_event_type", columnList = "eventType"),
+        @Index(name = "idx_cycleway_type", columnList = "cyclewayType")
 })
 @Getter
 @Setter
@@ -67,7 +70,17 @@ public class SegmentEvent {
     private String smoothness;
     private String lit;
     private String highway;
-    private String cycleway;
+    
+    @Enumerated(EnumType.STRING)
+    private CyclewayType cyclewayType;
+    
+    @Enumerated(EnumType.STRING)
+    private CyclewayLocation cyclewayLocation;
+    
+    private String cyclewaySurface;
+    private Double cyclewayWidth;
+    private Boolean bicycleOneway;
+    
     private Double temperature2m;
     private Double precipitation;
     private Double windSpeed10m;
