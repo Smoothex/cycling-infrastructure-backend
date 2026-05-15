@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.domain;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import jakarta.persistence.*;
@@ -92,6 +93,9 @@ public class SegmentEvent {
     @Enumerated(EnumType.STRING)
     private WindExposure windExposure;
 
+    @Enumerated(EnumType.STRING)
+    private RideIntent rideIntent;
+
     public static SegmentEvent of(SegmentEventType type,
                                   StreetSegment segment,
                                   Ride ride,
@@ -103,6 +107,7 @@ public class SegmentEvent {
         event.ride = ride;
         event.eventTimestamp = eventTimestamp;
         event.pathBearingDegrees = pathBearingDegrees;
+        event.rideIntent = ride.getRideIntent();
 
         ZonedDateTime berlinTime = Instant.ofEpochMilli(eventTimestamp).atZone(BERLIN_ZONE);
         event.dayOfWeek = berlinTime.getDayOfWeek();

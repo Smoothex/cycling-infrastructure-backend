@@ -33,6 +33,7 @@ public class DetourAnalysisService {
     private final RideRepository rideRepository;
     private final StreetSegmentService streetSegmentService;
     private final StreetSegmentRepository streetSegmentRepository;
+    private final RideIntentClassifier rideIntentClassifier;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     private final WKTWriter wktWriter = new WKTWriter();
 
@@ -45,11 +46,13 @@ public class DetourAnalysisService {
     public DetourAnalysisService(GraphHopperService graphHopperService,
                                  RideRepository rideRepository,
                                  StreetSegmentService streetSegmentService,
-                                 StreetSegmentRepository streetSegmentRepository) {
+                                 StreetSegmentRepository streetSegmentRepository,
+                                 RideIntentClassifier rideIntentClassifier) {
         this.graphHopperService = graphHopperService;
         this.rideRepository = rideRepository;
         this.streetSegmentService = streetSegmentService;
         this.streetSegmentRepository = streetSegmentRepository;
+        this.rideIntentClassifier = rideIntentClassifier;
     }
 
     @Transactional
@@ -115,9 +118,16 @@ public class DetourAnalysisService {
                 Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
                         shortestEdges, actualEdges, actualTrajectory);
 
+                double overlapRatio = shortestEdges.isEmpty() ? 1.0
+                        : (double) (shortestEdges.size() - avoidedEdges.size()) / shortestEdges.size();
+                ride.setOverlapRatio(overlapRatio);
+
                 if (isAlternativeRoute(shortestEdges, avoidedEdges, 0.30)) {
                     log.info("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
-                    return markAs(ride, Status.ALTERNATIVE_ROUTE);
+                    ride.setStatus(Status.ALTERNATIVE_ROUTE);
+                    rideIntentClassifier.classify(ride);
+                    rideRepository.save(ride);
+                    return Status.ALTERNATIVE_ROUTE;
                 }
 
                 Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
@@ -137,7 +147,10 @@ public class DetourAnalysisService {
                         ride.getTraversedEdgeTimestamps(),
                         chosenEdges
                 );
-                
+
+                ride.setStatus(Status.PROCESSED);
+                rideIntentClassifier.classify(ride);
+
                 streetSegmentService.registerSegmentEvents(
                         avoidedEdgeBearings,
                         avoidedEdgeTimestamps,
@@ -149,9 +162,22 @@ public class DetourAnalysisService {
 
                 log.info("Ride {} identified as detour. Avoided {} edges, Chosen {} edges.",
                         ride.getId(), avoidedEdges.size(), chosenEdges.size());
+            } else {
+                int sharedEdges = 0;
+                for (Integer edgeId : shortestEdges) {
+                    if (actualEdges.contains(edgeId))
+                        sharedEdges++;
+                }
+                double overlapRatio = shortestEdges.isEmpty() ? 1.0
+                        : (double) sharedEdges / shortestEdges.size();
+                ride.setOverlapRatio(overlapRatio);
+
+                ride.setStatus(Status.PROCESSED);
+                rideIntentClassifier.classify(ride);
             }
 
-            return markAs(ride, Status.PROCESSED);
+            rideRepository.save(ride);
+            return Status.PROCESSED;
 
         } catch (Exception e) {
             log.error("Failed to analyze ride {}", rideId, e);

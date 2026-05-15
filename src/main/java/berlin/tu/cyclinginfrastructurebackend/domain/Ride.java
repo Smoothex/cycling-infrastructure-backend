@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.domain;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -60,6 +61,10 @@ public class Ride {
     private Double actualDistance;
     private Double shortestPathDistance;
     private Boolean isDetour;
+    private Double overlapRatio;    // actual overlap with shortest path
+
+    @Enumerated(EnumType.STRING)
+    private RideIntent rideIntent;
 
     @Column(columnDefinition = "geometry(LineString,4326)")
     private LineString shortestPath;
