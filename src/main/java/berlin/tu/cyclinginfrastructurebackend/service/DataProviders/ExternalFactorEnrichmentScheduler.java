@@ -4,6 +4,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.BerlinOpenData.RoadClosureDataProvider;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.BerlinTraffic.TrafficDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeApiDataProvider;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ public class ExternalFactorEnrichmentScheduler {
     private final WeatherDataProvider weatherDataProvider;
     private final RoadClosureDataProvider roadClosureDataProvider;
     private final OhsomeApiDataProvider ohsomeApiDataProvider;
+    private final TrafficDataProvider trafficDataProvider;
 
     @Value("${enrichment.weather.enabled:false}")
     private boolean weatherEnabled;
@@ -56,14 +58,22 @@ public class ExternalFactorEnrichmentScheduler {
     @Value("${enrichment.ohsome.delay-between-calls-ms:500}")
     private long ohsomeDelayMs;
 
+    @Value("${enrichment.traffic.enabled:false}")
+    private boolean trafficEnabled;
+
+    @Value("${enrichment.traffic.batch-size:500}")
+    private int trafficBatchSize;
+
     public ExternalFactorEnrichmentScheduler(SegmentEventRepository segmentEventRepository,
                                              WeatherDataProvider weatherDataProvider,
                                              RoadClosureDataProvider roadClosureDataProvider,
-                                             OhsomeApiDataProvider ohsomeApiDataProvider) {
+                                             OhsomeApiDataProvider ohsomeApiDataProvider,
+                                             TrafficDataProvider trafficDataProvider) {
         this.segmentEventRepository = segmentEventRepository;
         this.weatherDataProvider = weatherDataProvider;
         this.roadClosureDataProvider = roadClosureDataProvider;
         this.ohsomeApiDataProvider = ohsomeApiDataProvider;
+        this.trafficDataProvider = trafficDataProvider;
     }
 
     // ---- Weather enrichment ----
@@ -121,6 +131,26 @@ public class ExternalFactorEnrichmentScheduler {
                 ohsomeApiDataProvider::enrichEvent,
                 event -> {
                     event.setOhsomeEnriched(true);
+                    segmentEventRepository.save(event);
+                }
+        );
+    }
+
+    // ---- Traffic Enrichment ----
+
+    @Scheduled(fixedDelayString = "${enrichment.traffic.schedule-delay-ms:60000}")
+    public void enrichTrafficPending() {
+        if (!trafficEnabled) return;
+
+        runGenericEnrichment(
+                "Traffic",
+                segmentEventRepository::findUnenrichedByTraffic,
+                segmentEventRepository.countByTrafficEnriched(false),
+                trafficBatchSize,
+                0,
+                trafficDataProvider::enrichEvent,
+                event -> {
+                    event.setTrafficEnriched(true);
                     segmentEventRepository.save(event);
                 }
         );

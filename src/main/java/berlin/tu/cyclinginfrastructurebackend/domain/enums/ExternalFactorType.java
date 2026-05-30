@@ -6,6 +6,6 @@ public enum ExternalFactorType {
     ROAD_CLOSURE,
     EVENT,
     HAZARD,
-    INCIDENT
+    INCIDENT,
+    TRAFFIC
 }
-
