@@ -4,6 +4,9 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficSourceType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -66,6 +69,25 @@ public class SegmentEvent {
 
     @Column(columnDefinition = "boolean not null default false")
     private boolean ohsomeEnriched = false;
+
+    @Column(columnDefinition = "boolean not null default false")
+    private boolean trafficEnriched = false;
+
+    @Enumerated(EnumType.STRING)
+    private TrafficEnrichmentStatus trafficEnrichmentStatus;
+
+    @Enumerated(EnumType.STRING)
+    private TrafficCondition trafficCondition;
+
+    @Enumerated(EnumType.STRING)
+    private TrafficSourceType trafficSourceType;
+
+    private Integer trafficVolumeKfz;
+    private Double trafficSpeedKfz;
+    private Integer trafficVolumePkw;
+    private Double trafficSpeedPkw;
+    private Integer trafficVolumeLkw;
+    private Double trafficSpeedLkw;
 
     private String surface;
     private String smoothness;

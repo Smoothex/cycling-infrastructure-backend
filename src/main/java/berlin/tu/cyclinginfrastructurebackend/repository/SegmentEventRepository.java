@@ -32,4 +32,9 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     List<SegmentEvent> findUnenrichedByOhsome(Pageable pageable);
 
     long countByOhsomeEnriched(boolean ohsomeEnriched);
+
+    @Query("SELECT se FROM SegmentEvent se JOIN FETCH se.segment WHERE se.trafficEnriched = false")
+    List<SegmentEvent> findUnenrichedByTraffic(Pageable pageable);
+
+    long countByTrafficEnriched(boolean trafficEnriched);
 }
