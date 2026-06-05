@@ -3,6 +3,8 @@ package berlin.tu.cyclinginfrastructurebackend.service.dto;
 import java.util.List;
 import java.util.Map;
 
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.SegmentTrafficStatsDto;
+
 public record SegmentSummaryDto(
         Long id,
         String streetName,
@@ -11,6 +13,9 @@ public record SegmentSummaryDto(
         Double avoidanceRatio,
         int preferenceCount,
         Double preferenceRatio,
+        int totalObservationCount,
+        Double gradientPercent,
+        SegmentTrafficStatsDto traffic,
         long incidentCount,
         List<IncidentBreakdownDto> incidentBreakdown,
         List<ExternalFactorDto> externalFactors
@@ -26,4 +31,3 @@ public record SegmentSummaryDto(
             Map<String, Object> metadata
     ) {}
 }
-

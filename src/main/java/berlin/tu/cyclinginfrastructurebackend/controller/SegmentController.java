@@ -2,17 +2,26 @@ package berlin.tu.cyclinginfrastructurebackend.controller;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Incident;
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentExternalFactor;
+import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.repository.IncidentRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
+import berlin.tu.cyclinginfrastructurebackend.service.GeoJsonMapper;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto.ExternalFactorDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto.IncidentBreakdownDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.GeoJsonFeatureCollectionDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.SegmentEventDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.SegmentTrafficStatsDto;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
@@ -23,17 +32,59 @@ import java.util.stream.Collectors;
 public class SegmentController {
 
     private static final double DEFAULT_INCIDENT_RADIUS_METERS = 25.0;
+    private static final int MAX_MAP_LIMIT = 10000;
+    private static final int MAX_EVENT_LIMIT = 1000;
 
     private final StreetSegmentRepository segmentRepository;
     private final IncidentRepository incidentRepository;
     private final SegmentExternalFactorRepository segmentExternalFactorRepository;
+    private final SegmentEventRepository segmentEventRepository;
+    private final GeoJsonMapper geoJsonMapper;
 
     public SegmentController(StreetSegmentRepository segmentRepository,
                              IncidentRepository incidentRepository,
-                             SegmentExternalFactorRepository segmentExternalFactorRepository) {
+                             SegmentExternalFactorRepository segmentExternalFactorRepository,
+                             SegmentEventRepository segmentEventRepository,
+                             GeoJsonMapper geoJsonMapper) {
         this.segmentRepository = segmentRepository;
         this.incidentRepository = incidentRepository;
         this.segmentExternalFactorRepository = segmentExternalFactorRepository;
+        this.segmentEventRepository = segmentEventRepository;
+        this.geoJsonMapper = geoJsonMapper;
+    }
+
+    @GetMapping(value = "/geojson", produces = "application/geo+json")
+    public GeoJsonFeatureCollectionDto getSegmentsGeoJson(
+            @RequestParam(required = false, defaultValue = "0.2") Double minAvoidanceRatio,
+            @RequestParam(required = false, defaultValue = "0.2") Double minPreferenceRatio,
+            @RequestParam(defaultValue = "1") int minSampleSize,
+            @RequestParam(required = false) String bbox,
+            @RequestParam(defaultValue = "1000") int limit) {
+
+        int safeLimit = limitToRange(limit, 1, MAX_MAP_LIMIT);
+        List<StreetSegment> segments;
+        if (bbox != null && !bbox.isBlank()) {
+            BoundingBox parsedBbox = parseBoundingBox(bbox);
+            segments = segmentRepository.findSegmentsForMapWithinBbox(
+                    minAvoidanceRatio,
+                    minPreferenceRatio,
+                    minSampleSize,
+                    parsedBbox.minLon(),
+                    parsedBbox.minLat(),
+                    parsedBbox.maxLon(),
+                    parsedBbox.maxLat(),
+                    safeLimit
+            );
+        } else {
+            segments = segmentRepository.findSegmentsForMap(
+                    minAvoidanceRatio,
+                    minPreferenceRatio,
+                    minSampleSize,
+                    safeLimit
+            );
+        }
+
+        return geoJsonMapper.toSegmentFeatureCollection(segments, findTrafficStats(segments));
     }
 
     @GetMapping("/{id}")
@@ -49,13 +100,17 @@ public class SegmentController {
     @GetMapping
     public List<SegmentSummaryDto> getSuspiciousSegments(
             @RequestParam(defaultValue = "0.2") double minAvoidanceRatio,
-            @RequestParam(defaultValue = "10") int minSampleSize,
+            @RequestParam(defaultValue = "1") int minSampleSize,
             @RequestParam(defaultValue = "50") int limit) {
 
-        return segmentRepository
+        List<StreetSegment> segments = segmentRepository
                 .findSuspiciousSegments(minAvoidanceRatio, minSampleSize, PageRequest.of(0, limit))
                 .stream()
-                .map(this::toSummary)
+                .toList();
+        Map<Long, SegmentTrafficStatsDto> trafficStatsBySegmentId = findTrafficStats(segments);
+
+        return segments.stream()
+                .map(segment -> toSummary(segment, trafficStatsBySegmentId.get(segment.getId())))
                 .toList();
     }
 
@@ -89,7 +144,36 @@ public class SegmentController {
         return ResponseEntity.ok(dtos);
     }
 
+    @GetMapping("/{id}/events")
+    public ResponseEntity<List<SegmentEventDto>> getSegmentEvents(
+            @PathVariable Long id,
+            @RequestParam(required = false) SegmentEventType eventType,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(defaultValue = "100") int limit) {
+
+        if (!segmentRepository.existsById(id)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<SegmentEvent> events = segmentEventRepository.findSegmentEventsForApi(
+                id,
+                eventType,
+                from,
+                to,
+                PageRequest.of(0, limitToRange(limit, 1, MAX_EVENT_LIMIT))
+        );
+
+        return ResponseEntity.ok(events.stream()
+                .map(SegmentEventDto::from)
+                .toList());
+    }
+
     private SegmentSummaryDto toSummary(StreetSegment segment) {
+        return toSummary(segment, findTrafficStats(List.of(segment)).get(segment.getId()));
+    }
+
+    private SegmentSummaryDto toSummary(StreetSegment segment, SegmentTrafficStatsDto trafficStats) {
         List<Incident> nearbyIncidents = incidentRepository
                 .findIncidentsNearSegment(segment.getId(), DEFAULT_INCIDENT_RADIUS_METERS);
 
@@ -115,6 +199,9 @@ public class SegmentController {
                 segment.getAvoidanceRatio(),
                 segment.getPreferenceCount(),
                 segment.getPreferenceRatio(),
+                totalObservationCount(segment),
+                segment.getGradientPercent(),
+                trafficStats,
                 nearbyIncidents.size(),
                 breakdown,
                 factors
@@ -129,5 +216,61 @@ public class SegmentController {
                 factor.getValidTo(),
                 factor.getMetadata()
         );
+    }
+
+    private int totalObservationCount(StreetSegment segment) {
+        return segment.getUsageCount() + segment.getAvoidanceCount() + segment.getPreferenceCount();
+    }
+
+    private Map<Long, SegmentTrafficStatsDto> findTrafficStats(List<StreetSegment> segments) {
+        List<Long> segmentIds = segments.stream()
+                .map(StreetSegment::getId)
+                .toList();
+
+        if (segmentIds.isEmpty()) {
+            return Map.of();
+        }
+
+        return segmentEventRepository.findTrafficStatsForSegments(segmentIds).stream()
+                .map(SegmentTrafficStatsDto::from)
+                .collect(Collectors.toMap(SegmentTrafficStatsDto::segmentId, stats -> stats));
+    }
+
+    private int limitToRange(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    private BoundingBox parseBoundingBox(String bbox) {
+        String[] parts = bbox.split(",");
+        if (parts.length != 4) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "bbox must contain minLon,minLat,maxLon,maxLat"
+            );
+        }
+
+        try {
+            double minLon = Double.parseDouble(parts[0].trim());
+            double minLat = Double.parseDouble(parts[1].trim());
+            double maxLon = Double.parseDouble(parts[2].trim());
+            double maxLat = Double.parseDouble(parts[3].trim());
+
+            if (minLon >= maxLon || minLat >= maxLat) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "bbox minimum coordinates must be smaller than maximum coordinates"
+                );
+            }
+
+            return new BoundingBox(minLon, minLat, maxLon, maxLat);
+        } catch (NumberFormatException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "bbox must contain numeric minLon,minLat,maxLon,maxLat"
+            );
+        }
+    }
+
+    private record BoundingBox(double minLon, double minLat, double maxLon, double maxLat) {
     }
 }

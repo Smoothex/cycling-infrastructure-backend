@@ -1,0 +1,66 @@
+### Segments: GeoJSON for map rendering
+# Properties include avoidance/preference ratios plus aggregate traffic context:
+# dominantTrafficCondition, trafficMeasuredShare, averageTrafficVolumeKfz, averageTrafficSpeedKfz.
+GET http://localhost:8080/api/segments/geojson?bbox=13.0883,52.3383,13.7611,52.6755&minAvoidanceRatio=0.2&minPreferenceRatio=0.2&minSampleSize=1&limit=1000
+Accept: application/geo+json
+
+### Segments: ranked suspicious segments
+GET http://localhost:8080/api/segments?minAvoidanceRatio=0.2&minSampleSize=1&limit=50
+Accept: application/json
+
+### Segments: single segment summary
+GET http://localhost:8080/api/segments/26538138
+Accept: application/json
+
+### Segments: external factors for one segment
+GET http://localhost:8080/api/segments/26538138/factors
+Accept: application/json
+
+### Segments: external factors filtered by type and time range
+GET http://localhost:8080/api/segments/26538138/factors?factorType=WEATHER&from=1546300800000&to=1609459199000
+Accept: application/json
+
+### Segments: event rows for one segment
+# Rows include raw traffic condition/source/status and Kfz/Pkw/Lkw volume/speed values.
+GET http://localhost:8080/api/segments/26538138/events?limit=100
+Accept: application/json
+
+### Segments: avoided event rows for one segment in a time range
+GET http://localhost:8080/api/segments/26538138/events?eventType=AVOIDANCE&from=1546300800000&to=1609459199000&limit=100
+Accept: application/json
+
+### Analytics: processing and enrichment summary
+GET http://localhost:8080/api/analytics/summary
+Accept: application/json
+
+### Analytics: distribution by event type
+GET http://localhost:8080/api/analytics/distribution?dimension=EVENT_TYPE&limit=50
+Accept: application/json
+
+### Analytics: distribution by cycleway type
+GET http://localhost:8080/api/analytics/distribution?dimension=CYCLEWAY_TYPE&from=1546300800000&to=1609459199000&limit=50
+Accept: application/json
+
+### Analytics: distribution filtered to avoided events
+GET http://localhost:8080/api/analytics/distribution?dimension=WIND_EXPOSURE&eventType=AVOIDANCE&limit=50
+Accept: application/json
+
+### Analytics: distribution by traffic condition
+GET http://localhost:8080/api/analytics/distribution?dimension=TRAFFIC_CONDITION&limit=50
+Accept: application/json
+
+### Analytics: avoided share by traffic volume bucket
+GET http://localhost:8080/api/analytics/distribution?dimension=TRAFFIC_VOLUME_BUCKET&limit=50
+Accept: application/json
+
+### Analytics: avoided share by traffic speed bucket
+GET http://localhost:8080/api/analytics/distribution?dimension=TRAFFIC_SPEED_BUCKET&limit=50
+Accept: application/json
+
+### Analytics: monthly event time series
+GET http://localhost:8080/api/analytics/time-series?bucket=MONTH
+Accept: application/json
+
+### Analytics: weekly avoided-event time series in a time range
+GET http://localhost:8080/api/analytics/time-series?bucket=WEEK&eventType=AVOIDANCE&from=1546300800000&to=1609459199000
+Accept: application/json

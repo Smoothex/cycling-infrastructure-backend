@@ -54,6 +54,53 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             "ORDER BY s.avoidanceRatio DESC")
     List<StreetSegment> findSuspiciousSegments(double minAvoidanceRatio, int minSampleSize, Pageable pageable);
 
+    @Query(value = """
+        SELECT s.*
+        FROM street_segments s
+        WHERE s.geometry IS NOT NULL
+          AND (:minSampleSize <= 0 OR (s.usage_count + s.avoidance_count + s.preference_count) >= :minSampleSize)
+          AND (
+              (:minAvoidanceRatio IS NULL AND :minPreferenceRatio IS NULL)
+              OR (:minAvoidanceRatio IS NOT NULL AND s.avoidance_ratio >= :minAvoidanceRatio)
+              OR (:minPreferenceRatio IS NOT NULL AND s.preference_ratio >= :minPreferenceRatio)
+          )
+        ORDER BY GREATEST(COALESCE(s.avoidance_ratio, 0), COALESCE(s.preference_ratio, 0)) DESC,
+                 (s.usage_count + s.avoidance_count + s.preference_count) DESC
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<StreetSegment> findSegmentsForMap(Double minAvoidanceRatio,
+                                           Double minPreferenceRatio,
+                                           int minSampleSize,
+                                           int limit);
+
+    @Query(value = """
+        SELECT s.*
+        FROM street_segments s
+        WHERE s.geometry IS NOT NULL
+          AND ST_Intersects(s.geometry, ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))
+          AND (:minSampleSize <= 0 OR (s.usage_count + s.avoidance_count + s.preference_count) >= :minSampleSize)
+          AND (
+              (:minAvoidanceRatio IS NULL AND :minPreferenceRatio IS NULL)
+              OR (:minAvoidanceRatio IS NOT NULL AND s.avoidance_ratio >= :minAvoidanceRatio)
+              OR (:minPreferenceRatio IS NOT NULL AND s.preference_ratio >= :minPreferenceRatio)
+          )
+        ORDER BY GREATEST(COALESCE(s.avoidance_ratio, 0), COALESCE(s.preference_ratio, 0)) DESC,
+                 (s.usage_count + s.avoidance_count + s.preference_count) DESC
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<StreetSegment> findSegmentsForMapWithinBbox(Double minAvoidanceRatio,
+                                                     Double minPreferenceRatio,
+                                                     int minSampleSize,
+                                                     double minLon,
+                                                     double minLat,
+                                                     double maxLon,
+                                                     double maxLat,
+                                                     int limit);
+
+    @Query("SELECT COUNT(s) FROM StreetSegment s " +
+            "WHERE (s.usageCount + s.avoidanceCount + s.preferenceCount) > 0")
+    long countObservedSegments();
+
     /**
      * Checks if a GraphHopper edge is within a given distance (meters) of a reference geometry.
      * Uses ST_DWithin with geography cast for meter-accurate distance on WGS84 data.
