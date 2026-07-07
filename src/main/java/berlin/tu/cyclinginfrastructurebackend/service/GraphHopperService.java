@@ -14,17 +14,20 @@ import com.graphhopper.ResponsePath;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.Getter;
-import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.GeometryFactory;
-import org.locationtech.jts.geom.LineString;
-import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.List;
 
 @Service
@@ -33,6 +36,9 @@ public class GraphHopperService {
 
     @Value("${graphhopper.osm.file}")
     private String osmFile;
+
+    @Value("${graphhopper.osm.download-url}")
+    private String osmDownloadUrl;
 
     @Value("${graphhopper.graph.location}")
     private String graphLocation;
@@ -43,15 +49,12 @@ public class GraphHopperService {
     @Getter
     private GraphHopper hopper;
     private final ThreadLocal<MapMatching> mapMatchingThreadLocal = new ThreadLocal<>();
-    private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     private static final String PROFILE_BIKE_CUSTOM = "bike_custom";
     private static final String PROFILE_BIKE_SHORTEST = "bike_shortest";
 
     @PostConstruct
     public void init() {
-        if (!Files.exists(Path.of(osmFile))) {
-            throw new IllegalStateException("OSM file not found: " + osmFile);
-        }
+        ensureOsmFile();
 
         hopper = new GraphHopper();
         hopper.setOSMFile(osmFile);
@@ -73,6 +76,53 @@ public class GraphHopperService {
 
         hopper.setProfiles(bikeCustomProfile, bikeShortestProfile);
         hopper.importOrLoad();
+    }
+
+    /**
+     * Downloads the OSM extract if it is not present. The download goes to a
+     * .part file first and is moved into place only on success, so an aborted
+     * download is never mistaken for a complete file on the next startup.
+     */
+    private void ensureOsmFile() {
+        Path target = Path.of(osmFile);
+        if (Files.exists(target)) {
+            return;
+        }
+
+        log.info("OSM file not found at {}, downloading from {} (several GB, this can take a while)",
+                osmFile, osmDownloadUrl);
+        Path partFile = target.resolveSibling(target.getFileName() + ".part");
+        try {
+            if (target.getParent() != null) {
+                Files.createDirectories(target.getParent());
+            }
+            Files.deleteIfExists(partFile);
+
+            HttpClient client = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .connectTimeout(Duration.ofSeconds(30))
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(osmDownloadUrl)).GET().build();
+            HttpResponse<Path> response = client.send(request, HttpResponse.BodyHandlers.ofFile(partFile));
+            if (response.statusCode() != 200) {
+                throw new IllegalStateException(
+                        "OSM download failed with HTTP " + response.statusCode() + " from " + osmDownloadUrl);
+            }
+
+            Files.move(partFile, target, StandardCopyOption.ATOMIC_MOVE);
+            log.info("OSM download complete: {} ({} MB)", osmFile, Files.size(target) / (1024 * 1024));
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to download OSM file from " + osmDownloadUrl, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("OSM download interrupted", e);
+        } finally {
+            try {
+                Files.deleteIfExists(partFile);
+            } catch (IOException ignored) {
+                // best-effort cleanup of the partial download
+            }
+        }
     }
 
     public MatchResult match(List<Observation> observations) {
@@ -113,25 +163,6 @@ public class GraphHopperService {
         if (distance < 1.0) return 0.0;
 
         return ((endElevation - startElevation) / distance) * 100.0;
-    }
-
-
-    public LineString getEdgeGeometry(int edgeId) {
-        EdgeIteratorState edge = hopper.getBaseGraph().getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
-
-        if (edge == null) return null;
-
-        PointList points = edge.fetchWayGeometry(FetchMode.ALL);
-        if (points.isEmpty()) return null;
-
-        Coordinate[] coords = new Coordinate[points.size()];
-        for (int i = 0; i < points.size(); i++) {
-            coords[i] = new Coordinate(points.getLon(i), points.getLat(i));
-        }
-
-        if (coords.length < 2) return null;
-
-        return geometryFactory.createLineString(coords);
     }
 
     @PreDestroy

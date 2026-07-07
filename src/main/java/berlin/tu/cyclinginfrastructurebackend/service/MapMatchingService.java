@@ -19,7 +19,6 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -45,7 +44,6 @@ public class MapMatchingService {
         this.rideRepository = rideRepository;
     }
 
-    @Transactional
     public boolean processRide(Ride ride) {
         List<RidePoint> validPoints = filterAndSortPoints(ride);
         if (validPoints.size() < 2) return false;
@@ -69,11 +67,7 @@ public class MapMatchingService {
             ride.setTraversedEdgeBearings(computeEdgeBearings(edgeMatches));
             ride.setTraversedEdgeTimestamps(computeEdgeTimestamps(edgeMatches, validPoints));
 
-            // Update segments (Sort to prevent deadlocks)
-            edges.sort(Comparator.comparingLong(EdgeIteratorState::getEdge));
-            for (EdgeIteratorState edge : edges) {
-                segmentService.updateUsage(edge, hopperService);
-            }
+            segmentService.recordUsage(edges, hopperService);
 
             ride.setStatus(Status.PENDING);
             rideRepository.save(ride);

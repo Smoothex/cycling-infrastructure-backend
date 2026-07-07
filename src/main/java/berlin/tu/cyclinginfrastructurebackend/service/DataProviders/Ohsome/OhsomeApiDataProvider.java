@@ -4,19 +4,25 @@ import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.ApiRateLimitException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Point;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 
@@ -56,7 +62,9 @@ public class OhsomeApiDataProvider {
                     .retrieve()
                     .body(String.class);
 
-            log.info("Ohsome API response for event {}: {}", event.getId(), responseBody);
+            if (log.isDebugEnabled()) {
+                log.debug("Ohsome API response for event {}: {}", event.getId(), responseBody);
+            }
 
             OhsomeResponse response = objectMapper.readValue(responseBody, OhsomeResponse.class);
 
@@ -79,9 +87,50 @@ public class OhsomeApiDataProvider {
                     extractCyclewayInfo(props, event);
                 }
             }
+        } catch (RestClientResponseException e) {
+            if (isRateLimited(e)) {
+                Instant retryAt = parseRetryAfter(e);
+                log.warn("Ohsome API rate limit hit for event {}: {}. Backing off{}.",
+                        event.getId(), e.getMessage(), retryAt != null ? " until " + retryAt : "");
+                throw new ApiRateLimitException("Ohsome API rate limit exceeded", retryAt, e);
+            }
+            log.error("Failed to query ohsome API for event {}: {}", event.getId(), e.getMessage());
+            throw new RuntimeException("Ohsome API call failed", e);
         } catch (Exception e) {
             log.error("Failed to query ohsome API for event {}: {}", event.getId(), e.getMessage());
             throw new RuntimeException("Ohsome API call failed", e);
+        }
+    }
+
+    /** The public ohsome instance signals overload with 429 or 503 rather than a documented quota. */
+    private boolean isRateLimited(RestClientResponseException e) {
+        return e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS
+                || e.getStatusCode() == HttpStatus.SERVICE_UNAVAILABLE;
+    }
+
+    /**
+     * Parses the Retry-After response header, which may hold either delay seconds
+     * or an HTTP date.
+     *
+     * @return the instant to retry at, or null if the header is absent or malformed
+     */
+    private Instant parseRetryAfter(RestClientResponseException e) {
+        String retryAfter = e.getResponseHeaders() == null
+                ? null
+                : e.getResponseHeaders().getFirst(HttpHeaders.RETRY_AFTER);
+        if (retryAfter == null || retryAfter.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.now().plusSeconds(Long.parseLong(retryAfter.trim()));
+        } catch (NumberFormatException ignored) {
+            // not a seconds value, try HTTP date format
+        }
+        try {
+            return ZonedDateTime.parse(retryAfter.trim(), DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+        } catch (DateTimeParseException ex) {
+            log.debug("Unparseable Retry-After header '{}'.", retryAfter);
+            return null;
         }
     }
 

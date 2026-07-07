@@ -25,7 +25,5 @@ public interface IncidentRepository extends JpaRepository<Incident, UUID> {
             WHERE s.id = :segmentId
             """, nativeQuery = true)
     List<Incident> findIncidentsNearSegment(Long segmentId, double distanceMeters);
-
-    List<Incident> findByRideId(UUID rideId);
 }
 

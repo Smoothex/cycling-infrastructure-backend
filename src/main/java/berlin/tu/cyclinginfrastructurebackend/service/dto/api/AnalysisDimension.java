@@ -1,0 +1,23 @@
+package berlin.tu.cyclinginfrastructurebackend.service.dto.api;
+
+public enum AnalysisDimension {
+    EVENT_TYPE,
+    HOUR_OF_DAY,
+    DAY_OF_WEEK,
+    RIDE_INTENT,
+    WIND_EXPOSURE,
+    CYCLEWAY_TYPE,
+    CYCLEWAY_LOCATION,
+    HIGHWAY,
+    SURFACE,
+    SMOOTHNESS,
+    LIT,
+    WEATHER_CODE,
+    PRECIPITATION_BUCKET,
+    TEMPERATURE_BUCKET,
+    WIND_SPEED_BUCKET,
+    GRADIENT_BUCKET,
+    TRAFFIC_CONDITION,
+    TRAFFIC_VOLUME_BUCKET,
+    TRAFFIC_SPEED_BUCKET
+}

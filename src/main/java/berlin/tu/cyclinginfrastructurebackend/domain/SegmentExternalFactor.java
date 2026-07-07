@@ -22,6 +22,11 @@ import java.util.UUID;
         @Index(name = "idx_ext_factor_segment", columnList = "segment_id"),
         @Index(name = "idx_ext_factor_type", columnList = "factorType"),
         @Index(name = "idx_ext_factor_valid_range", columnList = "validFrom, validTo")
+}, uniqueConstraints = {
+        @UniqueConstraint(
+                name = "uk_ext_factor_segment_type_source_valid_from",
+                columnNames = {"segment_id", "factorType", "source", "validFrom"}
+        )
 })
 @Getter
 @Setter
