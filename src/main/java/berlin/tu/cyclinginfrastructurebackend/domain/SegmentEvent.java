@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.domain;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
@@ -64,14 +65,30 @@ public class SegmentEvent {
 
     private boolean weatherEnriched = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private EnrichmentStatus weatherProcessingStatus = EnrichmentStatus.PENDING;
+
     @Column(columnDefinition = "boolean not null default false")
     private boolean berlinOpenDataEnriched = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private EnrichmentStatus berlinOpenDataProcessingStatus = EnrichmentStatus.PENDING;
 
     @Column(columnDefinition = "boolean not null default false")
     private boolean ohsomeEnriched = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private EnrichmentStatus ohsomeProcessingStatus = EnrichmentStatus.PENDING;
+
     @Column(columnDefinition = "boolean not null default false")
     private boolean trafficEnriched = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private EnrichmentStatus trafficProcessingStatus = EnrichmentStatus.PENDING;
 
     @Enumerated(EnumType.STRING)
     private TrafficEnrichmentStatus trafficEnrichmentStatus;

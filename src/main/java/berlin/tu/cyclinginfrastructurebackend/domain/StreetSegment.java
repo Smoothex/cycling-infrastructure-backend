@@ -47,30 +47,4 @@ public class StreetSegment {
 
     @Column(name = "gradient_percent")
     private Double gradientPercent;
-
-    public void incrementUsage() {
-        this.usageCount++;
-        recalculateAvoidanceRatio();
-        recalculatePreferenceRatio();
-    }
-
-    public void incrementAvoidance() {
-        this.avoidanceCount++;
-        recalculateAvoidanceRatio();
-    }
-
-    public void incrementPreference() {
-        this.preferenceCount++;
-        recalculatePreferenceRatio();
-    }
-
-    private void recalculateAvoidanceRatio() {
-        int total = usageCount + avoidanceCount;
-        this.avoidanceRatio = total > 0 ? (double) avoidanceCount / total : null;
-    }
-
-    private void recalculatePreferenceRatio() {
-        int total = usageCount + preferenceCount;
-        this.preferenceRatio = total > 0 ? (double) preferenceCount / total : null;
-    }
 }

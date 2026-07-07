@@ -17,37 +17,83 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class StreetSegmentService {
     private static final Logger log = LoggerFactory.getLogger(StreetSegmentService.class);
     private final StreetSegmentRepository repository;
     private final SegmentEventRepository segmentEventRepository;
+    private final TransactionTemplate transactionTemplate;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public StreetSegmentService(StreetSegmentRepository repository,
-                                SegmentEventRepository segmentEventRepository) {
+                                SegmentEventRepository segmentEventRepository,
+                                PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.segmentEventRepository = segmentEventRepository;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
-    public void updateUsage(EdgeIteratorState edge, GraphHopperService hopperService) {
-        long edgeId = edge.getEdge();
-        int updated = repository.incrementUsage(edgeId);
-
-        if (updated == 0) {
-            String name = resolveEdgeName(edge, hopperService);
-            PointList points = edge.fetchWayGeometry(FetchMode.ALL);
-            Coordinate[] coords = toCoordinates(points);
-            Double gradient = hopperService.getGradientPercent((int) edgeId);
-
-            repository.upsertSegment(edgeId, name, geometryFactory.createLineString(coords), gradient);
-            repository.incrementUsage(edgeId);
+    public void recordUsage(List<EdgeIteratorState> edges, GraphHopperService hopperService) {
+        if (edges == null || edges.isEmpty()) {
+            return;
         }
+
+        List<EdgeIteratorState> sortedEdges = edges.stream()
+                .sorted(Comparator.comparingLong(EdgeIteratorState::getEdge))
+                .toList();
+        List<Integer> edgeIds = sortedEdges.stream()
+                .map(EdgeIteratorState::getEdge)
+                .distinct()
+                .toList();
+
+        ensureSegmentsExist(edgeIds, hopperService);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            for (EdgeIteratorState edge : sortedEdges) {
+                repository.incrementUsage((long) edge.getEdge());
+            }
+        });
+    }
+
+    public void ensureSegmentsExist(Collection<Integer> edgeIds, GraphHopperService hopperService) {
+        if (edgeIds == null || edgeIds.isEmpty()) {
+            return;
+        }
+
+        List<Integer> sortedEdgeIds = edgeIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .sorted()
+                .toList();
+        if (sortedEdgeIds.isEmpty()) {
+            return;
+        }
+
+        Set<Long> existingIds = new HashSet<>(repository.findExistingIds(
+                sortedEdgeIds.stream().map(Integer::longValue).toList()
+        ));
+
+        List<SegmentUpsert> missingSegments = sortedEdgeIds.stream()
+                .filter(edgeId -> !existingIds.contains(edgeId.longValue()))
+                .map(edgeId -> buildSegmentUpsert(edgeId, hopperService))
+                .flatMap(Optional::stream)
+                .toList();
+
+        if (missingSegments.isEmpty()) {
+            return;
+        }
+
+        transactionTemplate.executeWithoutResult(status -> {
+            for (SegmentUpsert segment : missingSegments) {
+                repository.upsertSegment(segment.id(), segment.name(), segment.geometry(), segment.gradientPercent());
+            }
+        });
     }
 
     @Transactional
@@ -72,22 +118,13 @@ public class StreetSegmentService {
         List<Integer> sortedEdgeIds = new ArrayList<>(allEdgeIds);
         Collections.sort(sortedEdgeIds);
 
-        for (Integer edgeId : sortedEdgeIds) {
-            ensureSegmentExists(edgeId, hopperService);
-        }
-
         if (hasAvoidedEdges) {
-            Set<Long> avoidedIds = avoidedEdgeBearings.keySet().stream()
-                    .map(Integer::longValue)
-                    .collect(Collectors.toSet());
-            repository.bulkIncrementAvoidance(avoidedIds);
+            repository.incrementAvoidanceAll(
+                    avoidedEdgeBearings.keySet().stream().map(Integer::longValue).toList());
         }
-
         if (hasChosenEdges) {
-            Set<Long> chosenIds = chosenEdgeBearings.keySet().stream()
-                    .map(Integer::longValue)
-                    .collect(Collectors.toSet());
-            repository.bulkIncrementPreference(chosenIds);
+            repository.incrementPreferenceAll(
+                    chosenEdgeBearings.keySet().stream().map(Integer::longValue).toList());
         }
 
         List<SegmentEvent> eventRecords = new ArrayList<>();
@@ -128,20 +165,28 @@ public class StreetSegmentService {
         segmentEventRepository.saveAll(eventRecords);
     }
 
-    public void ensureSegmentExists(int edgeId, GraphHopperService hopperService) {
+    private Optional<SegmentUpsert> buildSegmentUpsert(int edgeId, GraphHopperService hopperService) {
         EdgeIteratorState edge = hopperService.getHopper().getBaseGraph()
                 .getEdgeIteratorState(edgeId, Integer.MIN_VALUE);
 
-        if (edge != null) {
-            String name = resolveEdgeName(edge, hopperService);
-            PointList points = edge.fetchWayGeometry(FetchMode.ALL);
-            Coordinate[] coords = toCoordinates(points);
-            Double gradient = hopperService.getGradientPercent(edgeId);
-
-            if (coords.length >= 2) {
-                repository.upsertSegment((long) edgeId, name, geometryFactory.createLineString(coords), gradient);
-            }
+        if (edge == null) {
+            return Optional.empty();
         }
+
+        String name = resolveEdgeName(edge, hopperService);
+        PointList points = edge.fetchWayGeometry(FetchMode.ALL);
+        Coordinate[] coords = toCoordinates(points);
+        if (coords.length < 2) {
+            return Optional.empty();
+        }
+
+        Double gradient = hopperService.getGradientPercent(edgeId);
+        return Optional.of(new SegmentUpsert(
+                (long) edgeId,
+                name,
+                geometryFactory.createLineString(coords),
+                gradient
+        ));
     }
 
     private String resolveEdgeName(EdgeIteratorState edge, GraphHopperService hopperService) {
@@ -191,5 +236,13 @@ public class StreetSegmentService {
             }
         });
         return bestName[0];
+    }
+
+    private record SegmentUpsert(
+            Long id,
+            String name,
+            org.locationtech.jts.geom.LineString geometry,
+            Double gradientPercent
+    ) {
     }
 }

@@ -7,7 +7,7 @@ import berlin.tu.cyclinginfrastructurebackend.util.ImportMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.CommandLineRunner;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.FileInputStream;
@@ -17,23 +17,34 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Stream;
 
 @Component
-public class SimRaDataLoader implements CommandLineRunner {
+public class SimRaDataLoader {
 
     private static final Logger log = LoggerFactory.getLogger(SimRaDataLoader.class);
 
     private final RideRepository rideRepository;
     private final SimRaFileParser parser;
     private final MapMatchingService mapMatchingService;
+    private final Set<String> attemptedFilesThisRun = ConcurrentHashMap.newKeySet();
 
-    @Value("${simra.data.path:/Users/momchil.petrov/Downloads/SimRa}")
+    @Value("${simra.data.path:./data/SimRa}")
     private String dataPath;
 
-    @Value("${simra.import.enabled}")
+    @Value("${pipeline.import.enabled:false}")
     private boolean isImportEnabled;
+
+    @Value("${pipeline.enabled:true}")
+    private boolean pipelineEnabled;
+
+    @Value("${pipeline.import.batch-size:100}")
+    private int importBatchSize;
+
+    @Value("${pipeline.import.thread-pool-size:4}")
+    private int importThreadPoolSize;
 
     public SimRaDataLoader(RideRepository rideRepository,
                            SimRaFileParser parser,
@@ -43,14 +54,12 @@ public class SimRaDataLoader implements CommandLineRunner {
         this.mapMatchingService = mapMatchingService;
     }
 
-    @Override
-    public void run(String... args) {
-        if (!isImportEnabled) {
-            log.info("SimRa data import is DISABLED via properties. Skipping import phase.");
+    @Scheduled(fixedDelayString = "${pipeline.import.delay-ms:30000}")
+    public void importNextBatch() {
+        if (!pipelineEnabled || !isImportEnabled) {
             return;
         }
 
-        log.info("Starting SimRa data import from: {}", dataPath);
         Path startPath = Paths.get(dataPath);
 
         if (!Files.exists(startPath)) {
@@ -59,32 +68,35 @@ public class SimRaDataLoader implements CommandLineRunner {
         }
 
         Set<String> existingFiles = rideRepository.findAllOriginalFilenames();
-        log.info("Found {} existing rides in DB.", existingFiles.size());
 
         List<Path> filesToProcess;
+        int batchLimit = Math.max(1, importBatchSize);
+        log.info("Scanning SimRa data path {} for up to {} new files.", dataPath, batchLimit);
+
         try (Stream<Path> stream = Files.walk(startPath)) {
             filesToProcess = stream.filter(Files::isRegularFile)
                     .filter(path -> !path.getFileName().toString().startsWith("."))
                     .filter(path -> path.toString().contains("Rides"))
                     .filter(path -> path.getFileName().toString().startsWith("VM"))
                     .filter(path -> !existingFiles.contains(path.getFileName().toString()))
+                    .filter(path -> !attemptedFilesThisRun.contains(path.getFileName().toString()))
+                    .limit(batchLimit)
                     .toList();
         } catch (IOException e) {
             log.error("Error walking file tree", e);
             return;
         }
 
-        log.info("Found {} new files to process.", filesToProcess.size());
-
         if (filesToProcess.isEmpty()) {
-            log.info("No new files to import.");
+            log.debug("No new SimRa files to import.");
             return;
         }
 
+        log.info("Starting SimRa import batch with {} files from {}.", filesToProcess.size(), dataPath);
         ImportMetrics metrics = new ImportMetrics();
         int total = filesToProcess.size();
 
-        int threadCount = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+        int threadCount = Math.max(1, importThreadPoolSize);
 
         try (ForkJoinPool customThreadPool = new ForkJoinPool(threadCount)) {
             customThreadPool.submit(() ->
@@ -92,12 +104,14 @@ public class SimRaDataLoader implements CommandLineRunner {
                         try {
                             processFile(path, metrics);
                             int current = metrics.getFilesProcessed();
-                            if (current % 100 == 0) {
+                            if (current > 0 && current % 100 == 0) {
                                 log.info("Imported {}/{} rides...", current, total);
                             }
                         } catch (Exception e) {
                             metrics.recordFileFailed();
                             log.error("Failed to process file: {}", path.getFileName(), e);
+                        } finally {
+                            attemptedFilesThisRun.add(path.getFileName().toString());
                         }
                     })
             ).get();
@@ -119,7 +133,7 @@ public class SimRaDataLoader implements CommandLineRunner {
                 ride = parser.parse(fis, filename);
             } catch (IOException e) {
                 if (e.getMessage() != null && (e.getMessage().contains("separator not found") || e.getMessage().contains("file is empty"))) {
-                    log.warn("Skipping invalid file ({}): {}", e.getMessage(), filename);
+                    log.debug("Skipping invalid file ({}): {}", e.getMessage(), filename);
                     metrics.recordFileInvalid();
                     return;
                 }
@@ -128,13 +142,13 @@ public class SimRaDataLoader implements CommandLineRunner {
             metrics.recordParse(System.nanoTime() - parseStart);
 
             if (ride.getRidePoints().isEmpty()) {
-                log.warn("Ride has 0 points (skipping): {}", filename);
+                log.debug("Ride has 0 points (skipping): {}", filename);
                 metrics.recordFileSkipped();
                 return;
             }
 
             if (!isRideInGermany(ride)) {
-                log.warn("Ride contains points outside Germany (skipping): {}", filename);
+                log.debug("Ride contains points outside Germany (skipping): {}", filename);
                 metrics.recordFileSkipped();
                 return;
             }

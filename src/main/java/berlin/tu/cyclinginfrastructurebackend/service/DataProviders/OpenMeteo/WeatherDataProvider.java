@@ -6,6 +6,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.ApiRateLimitException;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.ExternalDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.OpenMeteoResponse;
 import org.locationtech.jts.geom.Coordinate;
@@ -13,10 +14,14 @@ import org.locationtech.jts.geom.LineString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -75,6 +80,11 @@ public class WeatherDataProvider implements ExternalDataProvider {
                             .build())
                     .retrieve()
                     .body(OpenMeteoResponse.class);
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            Instant retryAt = openMeteoRetryAt(e.getResponseBodyAsString());
+            log.warn("Open-Meteo rate limit hit for segment {}: {}. Backing off until {}.",
+                    segment.getId(), e.getMessage(), retryAt);
+            throw new ApiRateLimitException("Open-Meteo rate limit exceeded", retryAt, e);
         } catch (Exception e) {
             log.error("Open-Meteo API call failed for segment {} ({},{}): {}",
                     segment.getId(), centroid.y, centroid.x, e.getMessage());
@@ -298,6 +308,32 @@ public class WeatherDataProvider implements ExternalDataProvider {
             }
         }
         return null;
+    }
+
+    /**
+     * Derives when Open-Meteo will accept requests again from the 429 response body.
+     * Open-Meteo enforces minutely, hourly and daily quotas:
+     * <a href="https://open-meteo.com/en/terms#terms">Open-Meteo Terms of Use</a>
+     *
+     * @param responseBody the raw 429 response body
+     * @return the instant of the next quota reset, with a small buffer
+     */
+    private Instant openMeteoRetryAt(String responseBody) {
+        String body = responseBody == null ? "" : responseBody;
+        Instant now = Instant.now();
+        if (body.contains("Minutely")) {
+            return now.plusSeconds(75);
+        }
+        if (body.contains("Hourly")) {
+            return now.atZone(ZoneOffset.UTC).truncatedTo(ChronoUnit.HOURS)
+                    .plusHours(1).toInstant().plus(Duration.ofMinutes(2));
+        }
+        if (body.contains("Daily")) {
+            return now.atZone(ZoneOffset.UTC).truncatedTo(ChronoUnit.DAYS)
+                    .plusDays(1).toInstant().plus(Duration.ofMinutes(5));
+        }
+        // 429 without a recognized quota message: assume a short-lived limit
+        return now.plus(Duration.ofMinutes(15));
     }
 
     private Coordinate getCentroid(StreetSegment segment) {
