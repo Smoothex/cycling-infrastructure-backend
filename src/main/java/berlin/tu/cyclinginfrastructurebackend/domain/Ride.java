@@ -51,7 +51,11 @@ public class Ride {
     private LineString trajectory;
 
     @ElementCollection
-    @CollectionTable(name = "ride_edges", joinColumns = @JoinColumn(name = "ride_id"))
+    @CollectionTable(
+            name = "ride_edges",
+            joinColumns = @JoinColumn(name = "ride_id"),
+            indexes = @Index(name = "idx_ride_edges_ride_id", columnList = "ride_id")
+    )
     @Column(name = "edge_id")
     private List<Integer> traversedEdgeIds = new ArrayList<>();
 

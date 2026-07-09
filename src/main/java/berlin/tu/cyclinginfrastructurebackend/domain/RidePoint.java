@@ -9,7 +9,7 @@ import org.locationtech.jts.geom.Point;
 import java.util.UUID;
 
 @Entity
-@Table(name = "ride_points")
+@Table(name = "ride_points", indexes = @Index(name = "idx_ride_points_ride_id", columnList = "ride_id"))
 @Getter
 @Setter
 @NoArgsConstructor
