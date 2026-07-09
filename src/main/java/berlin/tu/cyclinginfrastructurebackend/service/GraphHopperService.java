@@ -1,6 +1,7 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
 import com.graphhopper.GraphHopper;
+import com.graphhopper.config.CHProfile;
 import com.graphhopper.config.Profile;
 import com.graphhopper.json.Statement;
 import com.graphhopper.matching.MapMatching;
@@ -75,6 +76,10 @@ public class GraphHopperService {
         Profile bikeShortestProfile = new Profile(PROFILE_BIKE_SHORTEST).setCustomModel(shortestModel);
 
         hopper.setProfiles(bikeCustomProfile, bikeShortestProfile);
+
+        // set contraction hierarchy
+        hopper.getCHPreparationHandler().setCHProfiles(new CHProfile(PROFILE_BIKE_SHORTEST));
+
         hopper.importOrLoad();
     }
 

@@ -60,175 +60,142 @@ public class DetourAnalysisService {
     }
 
     public Status analyzeRide(UUID rideId) {
-        Ride ride = loadRideForAnalysis(rideId);
-        if (ride == null) {
-            log.warn("Ride with ID {} not found during analysis.", rideId);
-            return Status.ERROR;
-        }
-
-        try {
-            List<RidePoint> points = ride.getRidePoints().stream()
-                    .filter(p -> p.getLocation() != null)
-                    .sorted(Comparator.comparingLong(RidePoint::getTimestamp))
-                    .toList();
-
-            if (points.size() < 2 || ride.getTraversedEdgeIds().isEmpty() || ride.getTrajectory() == null) {
-                return markAs(rideId, Status.SKIPPED);
-            }
-
-            RidePoint start = points.getFirst();
-            RidePoint end = points.getLast();
-
-            ResponsePath shortestPath = graphHopperService.getShortestPath(
-                    start.getLocation().getY(), start.getLocation().getX(),
-                    end.getLocation().getY(), end.getLocation().getX()
-            );
-
-            if (shortestPath == null) {
-                return markAs(rideId, Status.SKIPPED);
-            }
-
-            Set<Integer> shortestEdges = extractEdgeIds(shortestPath);
-            Set<Integer> actualEdges = new HashSet<>(ride.getTraversedEdgeIds());
-
-            // Build shortest-path geometry and persist (can be removed in the future)
-            PointList ghPoints = shortestPath.getPoints();
-            Coordinate[] coords = new Coordinate[ghPoints.size()];
-            for (int i = 0; i < ghPoints.size(); i++) {
-                coords[i] = new Coordinate(ghPoints.getLon(i), ghPoints.getLat(i));
-            }
-            LineString shortestPathGeometry = geometryFactory.createLineString(coords);
-
-            ride.setShortestPath(shortestPathGeometry);
-            ride.setShortestPathEdgeIds(new ArrayList<>(shortestEdges));
-
-            double shortestPathDistance = shortestPath.getDistance();
-            double actualDistance = ride.getActualDistance();
-
-            ride.setShortestPathDistance(shortestPathDistance);
-            ride.setActualDistance(actualDistance);
-
-            boolean isDetour = actualDistance > shortestPathDistance * (1.0 + detourThreshold);
-            ride.setIsDetour(isDetour);
-
-            if (isDetour) {
-                Set<Integer> allEdges = new HashSet<>(shortestEdges);
-                allEdges.addAll(actualEdges);
-
-                ensureEdgesExist(allEdges);
-
-                LineString actualTrajectory = ride.getTrajectory();
-                Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
-                        shortestEdges, actualEdges, actualTrajectory);
-
-                double overlapRatio = shortestEdges.isEmpty() ? 1.0
-                        : (double) (shortestEdges.size() - avoidedEdges.size()) / shortestEdges.size();
-                ride.setOverlapRatio(overlapRatio);
-
-                if (isAlternativeRoute(shortestEdges, avoidedEdges, 0.30)) {
-                    log.debug("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
-                    ride.setStatus(Status.ALTERNATIVE_ROUTE);
-                    rideIntentClassifier.classify(ride);
-                    return saveRide(ride, Status.ALTERNATIVE_ROUTE);
-                }
-
-                Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
-                        actualEdges, shortestEdges, shortestPathGeometry);
-
-                Map<Integer, Double> avoidedEdgeBearings = buildEdgeBearingsFromShortestPath(
-                        shortestPath,
-                        avoidedEdges);
-                Map<Integer, Long> avoidedEdgeTimestamps = computeAvoidedEdgeTimestamps(avoidedEdges, ride, points);
-                
-                // Use pre-computed bearings from map matching instead of inferring direction
-                Map<Integer, Double> chosenEdgeBearings = filterEdgeBearings(
-                        ride.getTraversedEdgeBearings(),
-                        chosenEdges
-                );
-                Map<Integer, Long> chosenEdgeTimestamps = filterEdgeTimestamps(
-                        ride.getTraversedEdgeTimestamps(),
-                        chosenEdges
-                );
-
-                ride.setStatus(Status.PROCESSED);
-                rideIntentClassifier.classify(ride);
-
-                return saveRideAndRegisterEvents(
-                        ride,
-                        Status.PROCESSED,
-                        avoidedEdgeBearings,
-                        avoidedEdgeTimestamps,
-                        chosenEdgeBearings,
-                        chosenEdgeTimestamps
-                );
-            } else {
-                int sharedEdges = 0;
-                for (Integer edgeId : shortestEdges) {
-                    if (actualEdges.contains(edgeId))
-                        sharedEdges++;
-                }
-                double overlapRatio = shortestEdges.isEmpty() ? 1.0
-                        : (double) sharedEdges / shortestEdges.size();
-                ride.setOverlapRatio(overlapRatio);
-
-                ride.setStatus(Status.PROCESSED);
-                rideIntentClassifier.classify(ride);
-            }
-
-            return saveRide(ride, Status.PROCESSED);
-
-        } catch (Exception e) {
-            log.error("Failed to analyze ride {}", rideId, e);
-            return markAs(rideId, Status.ERROR);
-        }
-    }
-
-    private Ride loadRideForAnalysis(UUID rideId) {
-        return transactionTemplate.execute(status -> {
+        Status result = transactionTemplate.execute(txStatus -> {
             Ride ride = rideRepository.findById(rideId).orElse(null);
             if (ride == null) {
-                return null;
+                log.warn("Ride with ID {} not found during analysis.", rideId);
+                return Status.ERROR;
             }
 
-            ride.getRidePoints().size();
-            ride.getTraversedEdgeIds().size();
-            ride.getTraversedEdgeBearings().size();
-            ride.getTraversedEdgeTimestamps().size();
-            ride.getShortestPathEdgeIds().size();
-            return ride;
+            try {
+                return analyzeLoadedRide(ride);
+            } catch (Exception e) {
+                log.error("Failed to analyze ride {}", rideId, e);
+                txStatus.setRollbackOnly();
+                return Status.ERROR;
+            }
         });
+
+        if (result == Status.ERROR) {
+            rideRepository.updateStatus(rideId, Status.ERROR);
+        }
+        return result;
     }
 
-    private Status markAs(UUID rideId, Status status) {
-        rideRepository.updateStatus(rideId, status);
-        return status;
-    }
+    private Status analyzeLoadedRide(Ride ride) {
+        List<RidePoint> points = ride.getRidePoints().stream()
+                .filter(p -> p.getLocation() != null)
+                .sorted(Comparator.comparingLong(RidePoint::getTimestamp))
+                .toList();
 
-    private Status saveRide(Ride ride, Status status) {
-        return transactionTemplate.execute(transactionStatus -> {
-            rideRepository.save(ride);
-            return status;
-        });
-    }
+        if (points.size() < 2 || ride.getTraversedEdgeIds().isEmpty() || ride.getTrajectory() == null) {
+            ride.setStatus(Status.SKIPPED);
+            return Status.SKIPPED;
+        }
 
-    private Status saveRideAndRegisterEvents(Ride ride,
-                                             Status status,
-                                             Map<Integer, Double> avoidedEdgeBearings,
-                                             Map<Integer, Long> avoidedEdgeTimestamps,
-                                             Map<Integer, Double> chosenEdgeBearings,
-                                             Map<Integer, Long> chosenEdgeTimestamps) {
-        return transactionTemplate.execute(transactionStatus -> {
-            Ride savedRide = rideRepository.save(ride);
+        RidePoint start = points.getFirst();
+        RidePoint end = points.getLast();
+
+        ResponsePath shortestPath = graphHopperService.getShortestPath(
+                start.getLocation().getY(), start.getLocation().getX(),
+                end.getLocation().getY(), end.getLocation().getX()
+        );
+
+        if (shortestPath == null) {
+            ride.setStatus(Status.SKIPPED);
+            return Status.SKIPPED;
+        }
+
+        Set<Integer> shortestEdges = extractEdgeIds(shortestPath);
+        Set<Integer> actualEdges = new HashSet<>(ride.getTraversedEdgeIds());
+
+        // Build shortest-path geometry and persist (can be removed in the future)
+        PointList ghPoints = shortestPath.getPoints();
+        Coordinate[] coords = new Coordinate[ghPoints.size()];
+        for (int i = 0; i < ghPoints.size(); i++) {
+            coords[i] = new Coordinate(ghPoints.getLon(i), ghPoints.getLat(i));
+        }
+        LineString shortestPathGeometry = geometryFactory.createLineString(coords);
+
+        ride.setShortestPath(shortestPathGeometry);
+        ride.setShortestPathEdgeIds(new ArrayList<>(shortestEdges));
+
+        double shortestPathDistance = shortestPath.getDistance();
+        double actualDistance = ride.getActualDistance();
+
+        ride.setShortestPathDistance(shortestPathDistance);
+        ride.setActualDistance(actualDistance);
+
+        boolean isDetour = actualDistance > shortestPathDistance * (1.0 + detourThreshold);
+        ride.setIsDetour(isDetour);
+
+        if (isDetour) {
+            Set<Integer> allEdges = new HashSet<>(shortestEdges);
+            allEdges.addAll(actualEdges);
+
+            ensureEdgesExist(allEdges);
+
+            LineString actualTrajectory = ride.getTrajectory();
+            Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
+                    shortestEdges, actualEdges, actualTrajectory);
+
+            double overlapRatio = shortestEdges.isEmpty() ? 1.0
+                    : (double) (shortestEdges.size() - avoidedEdges.size()) / shortestEdges.size();
+            ride.setOverlapRatio(overlapRatio);
+
+            if (isAlternativeRoute(shortestEdges, avoidedEdges, 0.30)) {
+                log.debug("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
+                ride.setStatus(Status.ALTERNATIVE_ROUTE);
+                rideIntentClassifier.classify(ride);
+                return Status.ALTERNATIVE_ROUTE;
+            }
+
+            Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
+                    actualEdges, shortestEdges, shortestPathGeometry);
+
+            Map<Integer, Double> avoidedEdgeBearings = buildEdgeBearingsFromShortestPath(
+                    shortestPath,
+                    avoidedEdges);
+            Map<Integer, Long> avoidedEdgeTimestamps = computeAvoidedEdgeTimestamps(avoidedEdges, ride, points);
+
+            // Use pre-computed bearings from map matching instead of inferring direction
+            Map<Integer, Double> chosenEdgeBearings = filterEdgeBearings(
+                    ride.getTraversedEdgeBearings(),
+                    chosenEdges
+            );
+            Map<Integer, Long> chosenEdgeTimestamps = filterEdgeTimestamps(
+                    ride.getTraversedEdgeTimestamps(),
+                    chosenEdges
+            );
+
+            ride.setStatus(Status.PROCESSED);
+            rideIntentClassifier.classify(ride);
+
             streetSegmentService.registerSegmentEvents(
                     avoidedEdgeBearings,
                     avoidedEdgeTimestamps,
                     chosenEdgeBearings,
                     chosenEdgeTimestamps,
-                    savedRide,
+                    ride,
                     graphHopperService
             );
-            return status;
-        });
+
+            return Status.PROCESSED;
+        }
+
+        int sharedEdges = 0;
+        for (Integer edgeId : shortestEdges) {
+            if (actualEdges.contains(edgeId))
+                sharedEdges++;
+        }
+        double overlapRatio = shortestEdges.isEmpty() ? 1.0
+                : (double) sharedEdges / shortestEdges.size();
+        ride.setOverlapRatio(overlapRatio);
+
+        ride.setStatus(Status.PROCESSED);
+        rideIntentClassifier.classify(ride);
+
+        return Status.PROCESSED;
     }
 
     private Set<Integer> extractEdgeIds(ResponsePath path) {
