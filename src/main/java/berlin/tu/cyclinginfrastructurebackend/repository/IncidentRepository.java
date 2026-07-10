@@ -1,8 +1,10 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Incident;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -25,5 +27,19 @@ public interface IncidentRepository extends JpaRepository<Incident, UUID> {
             WHERE s.id = :segmentId
             """, nativeQuery = true)
     List<Incident> findIncidentsNearSegment(Long segmentId, double distanceMeters);
+
+    /**
+     * Near-miss (scary) incidents with a known location, optionally bounded by
+     * epoch-ms timestamps. Participants are fetched eagerly to avoid N+1 queries.
+     */
+    @EntityGraph(attributePaths = "involvedParticipants")
+    @Query("""
+            SELECT i FROM Incident i
+            WHERE i.scary = true
+              AND i.location IS NOT NULL
+              AND (:from IS NULL OR i.timestamp >= :from)
+              AND (:to IS NULL OR i.timestamp <= :to)
+            """)
+    List<Incident> findNearMisses(@Param("from") Long from, @Param("to") Long to);
 }
 
