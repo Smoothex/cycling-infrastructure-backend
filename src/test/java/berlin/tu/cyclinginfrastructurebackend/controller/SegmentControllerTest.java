@@ -50,7 +50,9 @@ class SegmentControllerTest {
 
     @Test
     void geoJsonEndpointReturnsFeatureCollection() throws Exception {
-        when(segmentRepository.findSegmentsForMap(0.2, 0.2, 1, 1000)).thenReturn(List.of());
+        when(segmentRepository.findSegmentsForMap(
+                0.2, 0.2, 1, false, 0L, Long.MAX_VALUE, false, false, false, false, 1000))
+                .thenReturn(List.of());
         when(geoJsonMapper.toSegmentFeatureCollection(eq(List.of()), any())).thenReturn(
                 new GeoJsonFeatureCollectionDto("FeatureCollection", List.of())
         );
@@ -73,6 +75,10 @@ class SegmentControllerTest {
                 eq(null),
                 eq(null),
                 eq(null),
+                eq(false),
+                eq(false),
+                eq(false),
+                eq(false),
                 pageableCaptor.capture()
         );
         assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(1000);
@@ -98,7 +104,9 @@ class SegmentControllerTest {
         event.setTrafficEnriched(true);
 
         when(segmentRepository.existsById(42L)).thenReturn(true);
-        when(eventRepository.findSegmentEventsForApi(eq(42L), eq(null), eq(null), eq(null), any(Pageable.class)))
+        when(eventRepository.findSegmentEventsForApi(
+                eq(42L), eq(null), eq(null), eq(null),
+                eq(false), eq(false), eq(false), eq(false), any(Pageable.class)))
                 .thenReturn(List.of(event));
 
         mockMvc.perform(get("/api/segments/42/events"))

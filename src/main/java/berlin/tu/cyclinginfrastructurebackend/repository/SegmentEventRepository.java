@@ -162,9 +162,16 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     @Query("SELECT MAX(se.eventTimestamp) FROM SegmentEvent se")
     Long findLatestEventTimestamp();
 
-    @Query("SELECT COUNT(se) FROM SegmentEvent se WHERE se.trafficVolumeKfz IS NOT NULL")
+    @Query("""
+            SELECT COUNT(se) FROM SegmentEvent se
+            WHERE se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED
+            """)
     long countTrafficMeasuredEvents();
 
+    /**
+     * The enrichment flags narrow to events actually carrying that enrichment;
+     * trafficMeasured means an attached detector measurement (status ENRICHED).
+     */
     @Query("""
             SELECT se FROM SegmentEvent se
             JOIN FETCH se.ride
@@ -172,6 +179,11 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
               AND (:eventType IS NULL OR se.eventType = :eventType)
               AND (:from IS NULL OR se.eventTimestamp >= :from)
               AND (:to IS NULL OR se.eventTimestamp <= :to)
+              AND (:weatherEnriched = false OR se.weatherEnriched = true)
+              AND (:ohsomeEnriched = false OR se.ohsomeEnriched = true)
+              AND (:trafficEnriched = false OR se.trafficEnriched = true)
+              AND (:trafficMeasured = false
+                   OR se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED)
             ORDER BY se.eventTimestamp DESC
             """)
     List<SegmentEvent> findSegmentEventsForApi(
@@ -179,6 +191,10 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
             SegmentEventType eventType,
             Long from,
             Long to,
+            boolean weatherEnriched,
+            boolean ohsomeEnriched,
+            boolean trafficEnriched,
+            boolean trafficMeasured,
             Pageable pageable
     );
 
@@ -193,7 +209,7 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     @Query("""
             SELECT se.segment.id,
                    SUM(CASE WHEN se.trafficEnriched = true THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN se.trafficVolumeKfz IS NOT NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED THEN 1 ELSE 0 END),
                    AVG(se.trafficVolumeKfz),
                    AVG(se.trafficSpeedKfz),
                    AVG(se.trafficVolumePkw),

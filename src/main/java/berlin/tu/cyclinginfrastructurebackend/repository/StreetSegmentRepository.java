@@ -1,7 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -67,12 +66,42 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     @Query("SELECT s.id FROM StreetSegment s WHERE s.id IN :ids")
     List<Long> findExistingIds(Collection<Long> ids);
 
-    /** Segments with highest avoidance ratio, filtered by minimum total observations to reduce noise. */
-    @Query("SELECT s FROM StreetSegment s " +
-            "WHERE (s.usageCount + s.avoidanceCount) >= :minSampleSize " +
-            "AND s.avoidanceRatio >= :minAvoidanceRatio " +
-            "ORDER BY s.avoidanceRatio DESC")
-    List<StreetSegment> findSuspiciousSegments(double minAvoidanceRatio, int minSampleSize, Pageable pageable);
+    /**
+     * Segments with highest avoidance ratio, filtered by minimum total observations to
+     * reduce noise. When event-level criteria are active (time window and/or enrichment
+     * filters), a segment qualifies only if at least one of its events matches all of
+     * them at once. trafficMeasured means an attached detector measurement
+     * (traffic_enrichment_status = 'ENRICHED'), matching the per-segment
+     * trafficMeasuredEventCount and the tile export semantics.
+     */
+    @Query(value = """
+            SELECT s.* FROM street_segments s
+            WHERE (s.usage_count + s.avoidance_count) >= :minSampleSize
+              AND s.avoidance_ratio >= :minAvoidanceRatio
+              AND (:eventCriteriaActive = false OR EXISTS (
+                    SELECT 1 FROM segment_events e
+                    WHERE e.segment_id = s.id
+                      AND e.event_timestamp >= :from
+                      AND e.event_timestamp <= :to
+                      AND (:weatherEnriched = false OR e.weather_enriched)
+                      AND (:ohsomeEnriched = false OR e.ohsome_enriched)
+                      AND (:trafficEnriched = false OR e.traffic_enriched)
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
+            ORDER BY s.avoidance_ratio DESC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<StreetSegment> findSuspiciousSegments(
+            double minAvoidanceRatio,
+            int minSampleSize,
+            boolean eventCriteriaActive,
+            long from,
+            long to,
+            boolean weatherEnriched,
+            boolean ohsomeEnriched,
+            boolean trafficEnriched,
+            boolean trafficMeasured,
+            int limit
+    );
 
     @Query("""
             SELECT COUNT(s) FROM StreetSegment s
@@ -88,6 +117,15 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                     COALESCE(s.avoidance_ratio, 0) >= :minAvoidanceRatio
                  OR COALESCE(s.preference_ratio, 0) >= :minPreferenceRatio
               )
+              AND (:eventCriteriaActive = false OR EXISTS (
+                    SELECT 1 FROM segment_events e
+                    WHERE e.segment_id = s.id
+                      AND e.event_timestamp >= :from
+                      AND e.event_timestamp <= :to
+                      AND (:weatherEnriched = false OR e.weather_enriched)
+                      AND (:ohsomeEnriched = false OR e.ohsome_enriched)
+                      AND (:trafficEnriched = false OR e.traffic_enriched)
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
             ORDER BY GREATEST(COALESCE(s.avoidance_ratio, 0), COALESCE(s.preference_ratio, 0)) DESC,
                      (s.usage_count + s.avoidance_count + s.preference_count) DESC
             LIMIT :limit
@@ -96,6 +134,13 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             double minAvoidanceRatio,
             double minPreferenceRatio,
             int minSampleSize,
+            boolean eventCriteriaActive,
+            long from,
+            long to,
+            boolean weatherEnriched,
+            boolean ohsomeEnriched,
+            boolean trafficEnriched,
+            boolean trafficMeasured,
             int limit
     );
 
@@ -107,6 +152,15 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                     COALESCE(s.avoidance_ratio, 0) >= :minAvoidanceRatio
                  OR COALESCE(s.preference_ratio, 0) >= :minPreferenceRatio
               )
+              AND (:eventCriteriaActive = false OR EXISTS (
+                    SELECT 1 FROM segment_events e
+                    WHERE e.segment_id = s.id
+                      AND e.event_timestamp >= :from
+                      AND e.event_timestamp <= :to
+                      AND (:weatherEnriched = false OR e.weather_enriched)
+                      AND (:ohsomeEnriched = false OR e.ohsome_enriched)
+                      AND (:trafficEnriched = false OR e.traffic_enriched)
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
               AND ST_Intersects(
                     s.geometry,
                     ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326)
@@ -118,6 +172,13 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             double minAvoidanceRatio,
             double minPreferenceRatio,
             int minSampleSize,
+            boolean eventCriteriaActive,
+            long from,
+            long to,
+            boolean weatherEnriched,
+            boolean ohsomeEnriched,
+            boolean trafficEnriched,
+            boolean trafficMeasured,
             double minLon,
             double minLat,
             double maxLon,

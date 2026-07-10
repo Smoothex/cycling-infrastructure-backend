@@ -5,6 +5,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentExternalFactor;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEnrichmentFilter;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.repository.IncidentRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
@@ -59,9 +60,13 @@ public class SegmentController {
             @RequestParam(required = false, defaultValue = "0.2") Double minPreferenceRatio,
             @RequestParam(defaultValue = "1") int minSampleSize,
             @RequestParam(required = false) String bbox,
-            @RequestParam(defaultValue = "1000") int limit) {
+            @RequestParam(defaultValue = "1000") int limit,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(required = false) List<SegmentEnrichmentFilter> enrichmentFilters) {
 
         int safeLimit = limitToRange(limit, 1, MAX_MAP_LIMIT);
+        EventCriteria criteria = EventCriteria.of(from, to, enrichmentFilters);
         List<StreetSegment> segments;
         if (bbox != null && !bbox.isBlank()) {
             BoundingBox parsedBbox = parseBoundingBox(bbox);
@@ -69,6 +74,13 @@ public class SegmentController {
                     minAvoidanceRatio,
                     minPreferenceRatio,
                     minSampleSize,
+                    criteria.active(),
+                    criteria.from(),
+                    criteria.to(),
+                    criteria.weatherEnriched(),
+                    criteria.ohsomeEnriched(),
+                    criteria.trafficEnriched(),
+                    criteria.trafficMeasured(),
                     parsedBbox.minLon(),
                     parsedBbox.minLat(),
                     parsedBbox.maxLon(),
@@ -80,6 +92,13 @@ public class SegmentController {
                     minAvoidanceRatio,
                     minPreferenceRatio,
                     minSampleSize,
+                    criteria.active(),
+                    criteria.from(),
+                    criteria.to(),
+                    criteria.weatherEnriched(),
+                    criteria.ohsomeEnriched(),
+                    criteria.trafficEnriched(),
+                    criteria.trafficMeasured(),
                     safeLimit
             );
         }
@@ -96,17 +115,30 @@ public class SegmentController {
 
     /**
      * Returns segments ranked by avoidance ratio, filtered by minimum thresholds.
+     * With a from/to window (epoch millis) and/or enrichmentFilters, only segments
+     * carrying at least one event matching all of those criteria at once are returned.
      */
     @GetMapping
     public List<SegmentSummaryDto> getSuspiciousSegments(
             @RequestParam(defaultValue = "0.2") double minAvoidanceRatio,
             @RequestParam(defaultValue = "10") int minSampleSize,
-            @RequestParam(defaultValue = "50") int limit) {
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(required = false) List<SegmentEnrichmentFilter> enrichmentFilters) {
 
-        List<StreetSegment> segments = segmentRepository
-                .findSuspiciousSegments(minAvoidanceRatio, minSampleSize, PageRequest.of(0, limit))
-                .stream()
-                .toList();
+        EventCriteria criteria = EventCriteria.of(from, to, enrichmentFilters);
+        List<StreetSegment> segments = segmentRepository.findSuspiciousSegments(
+                minAvoidanceRatio,
+                minSampleSize,
+                criteria.active(),
+                criteria.from(),
+                criteria.to(),
+                criteria.weatherEnriched(),
+                criteria.ohsomeEnriched(),
+                criteria.trafficEnriched(),
+                criteria.trafficMeasured(),
+                limitToRange(limit, 1, MAX_MAP_LIMIT));
         Map<Long, SegmentTrafficStatsDto> trafficStatsBySegmentId = findTrafficStats(segments);
 
         return segments.stream()
@@ -158,7 +190,8 @@ public class SegmentController {
             @RequestParam(required = false) SegmentEventType eventType,
             @RequestParam(required = false) Long from,
             @RequestParam(required = false) Long to,
-            @RequestParam(defaultValue = "100") int limit) {
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(required = false) List<SegmentEnrichmentFilter> enrichmentFilters) {
 
         if (!segmentRepository.existsById(id)) {
             return ResponseEntity.notFound().build();
@@ -169,6 +202,10 @@ public class SegmentController {
                 eventType,
                 from,
                 to,
+                hasFilter(enrichmentFilters, SegmentEnrichmentFilter.WEATHER_ENRICHED),
+                hasFilter(enrichmentFilters, SegmentEnrichmentFilter.OHSOME_ENRICHED),
+                hasFilter(enrichmentFilters, SegmentEnrichmentFilter.TRAFFIC_ENRICHED),
+                hasFilter(enrichmentFilters, SegmentEnrichmentFilter.TRAFFIC_MEASURED),
                 PageRequest.of(0, limitToRange(limit, 1, MAX_EVENT_LIMIT))
         );
 
@@ -250,6 +287,47 @@ public class SegmentController {
 
     private int limitToRange(int value, int min, int max) {
         return Math.max(min, Math.min(value, max));
+    }
+
+    private boolean hasFilter(List<SegmentEnrichmentFilter> filters, SegmentEnrichmentFilter filter) {
+        return filters != null && filters.contains(filter);
+    }
+
+    /**
+     * Event-level segment qualification criteria shared by the list and geojson
+     * endpoints: a segment qualifies when at least one of its events matches the
+     * time window and every selected enrichment at once. The window defaults to
+     * an all-time range so the repository queries need no null handling.
+     */
+    private record EventCriteria(
+            boolean active,
+            long from,
+            long to,
+            boolean weatherEnriched,
+            boolean ohsomeEnriched,
+            boolean trafficEnriched,
+            boolean trafficMeasured
+    ) {
+        private static EventCriteria of(Long from, Long to, List<SegmentEnrichmentFilter> filters) {
+            boolean weatherEnriched = has(filters, SegmentEnrichmentFilter.WEATHER_ENRICHED);
+            boolean ohsomeEnriched = has(filters, SegmentEnrichmentFilter.OHSOME_ENRICHED);
+            boolean trafficEnriched = has(filters, SegmentEnrichmentFilter.TRAFFIC_ENRICHED);
+            boolean trafficMeasured = has(filters, SegmentEnrichmentFilter.TRAFFIC_MEASURED);
+            return new EventCriteria(
+                    from != null || to != null
+                            || weatherEnriched || ohsomeEnriched || trafficEnriched || trafficMeasured,
+                    from != null ? from : 0L,
+                    to != null ? to : Long.MAX_VALUE,
+                    weatherEnriched,
+                    ohsomeEnriched,
+                    trafficEnriched,
+                    trafficMeasured
+            );
+        }
+
+        private static boolean has(List<SegmentEnrichmentFilter> filters, SegmentEnrichmentFilter filter) {
+            return filters != null && filters.contains(filter);
+        }
     }
 
     private BoundingBox parseBoundingBox(String bbox) {

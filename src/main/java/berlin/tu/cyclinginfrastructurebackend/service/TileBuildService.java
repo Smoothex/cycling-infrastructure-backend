@@ -6,6 +6,7 @@ import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
@@ -22,6 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * Builds the static PMTiles tileset consumed by the preference-avoidance map.
@@ -57,7 +59,30 @@ public class TileBuildService {
     private final String tileJoinBinary;
     private final long buildTimeoutMinutes;
 
+    // tippecanoe/tile-join redraw these in place with \r rather than emitting a new
+    // line; BufferedReader.lines() splits on \r too, so each redraw would otherwise
+    // become its own INFO line (thousands per build). Demoted to DEBUG.
+    private static final Pattern NOISY_PROGRESS_LINE = Pattern.compile(
+            "\\d+(\\.\\d+)?%\\s+\\d+/\\d+/\\d+"    // tile-writing progress bar, e.g. "30.7%  4/8/5"
+                    + "|Read [\\d.]+ million features"  // feature-read counter
+                    + "|Reordering geometry: \\d+%"     // geometry reorder counter
+                    + "|\\d+/\\d+/\\d+"                 // bare tile-join z/x/y tick
+    );
+
+    // tippecanoe retries several drop percentages per oversized tile before one fits
+    // the byte budget, so this fires ~15-20 times per tile within under a second.
+    // Only the fact that some tiles needed dropping is useful at INFO; the retry
+    // detail goes to DEBUG, and only the first occurrence per build surfaces at INFO.
+    private static final Pattern OVERSIZE_TILE_RETRY = Pattern.compile(
+            "tile \\d+/\\d+/\\d+ size is \\d+.*with detail"
+                    + "|Going to try keeping the sparsest [\\d.]+% of the features"
+    );
+
     private final AtomicBoolean running = new AtomicBoolean(false);
+    // set by the analysis/enrichment pipelines whenever they change tile-relevant data;
+    // consumed by the scheduled auto-rebuild so tiles never go stale by more than one
+    // check interval
+    private final AtomicBoolean dataChanged = new AtomicBoolean(false);
     private final ExecutorService buildExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "tile-build");
         thread.setDaemon(true);
@@ -93,6 +118,34 @@ public class TileBuildService {
         }
         buildExecutor.submit(this::runBuild);
         return true;
+    }
+
+    /**
+     * Marks the tileset stale. The scheduled check rebuilds it on its next pass.
+     * Called by the pipelines after they change segment counts or enrichment data.
+     */
+    public void markDataChanged() {
+        dataChanged.set(true);
+    }
+
+    /**
+     * Rebuilds at most once per check interval and only when data actually changed.
+     * A change arriving while a build is running stays flagged (the export snapshot
+     * predates it) and is picked up by the next pass.
+     */
+    @Scheduled(fixedDelayString = "${tiles.auto-rebuild-check-ms:300000}")
+    void rebuildIfDataChanged() {
+        if (!dataChanged.get() || running.get()) {
+            return;
+        }
+        dataChanged.set(false);
+        if (triggerRebuild()) {
+            log.info("Auto-triggered tile rebuild after pipeline data changes");
+        } else {
+            // lost the race against a concurrent manual trigger; keep the flag so the
+            // change still lands in a rebuild that started after it
+            dataChanged.set(true);
+        }
     }
 
     public TileStatusDto getStatus() {
@@ -191,8 +244,21 @@ public class TileBuildService {
                 .redirectErrorStream(true)
                 .start();
         Thread outputDrain = new Thread(() -> {
+            boolean[] oversizeWarned = {false};
             try (BufferedReader reader = process.inputReader(StandardCharsets.UTF_8)) {
-                reader.lines().forEach(line -> log.info("{}: {}", name, line));
+                reader.lines().forEach(line -> {
+                    if (OVERSIZE_TILE_RETRY.matcher(line).find()) {
+                        log.debug("{}: {}", name, line);
+                        if (!oversizeWarned[0]) {
+                            oversizeWarned[0] = true;
+                            log.info("{}: some tiles exceed the size limit, dropping sparse features to fit (see DEBUG for per-tile detail)", name);
+                        }
+                    } else if (NOISY_PROGRESS_LINE.matcher(line).find()) {
+                        log.debug("{}: {}", name, line);
+                    } else {
+                        log.info("{}: {}", name, line);
+                    }
+                });
             } catch (IOException e) {
                 log.warn("Failed reading {} output", name, e);
             }
@@ -223,6 +289,9 @@ public class TileBuildService {
             Path file = tileFilePath();
             if (Files.exists(file)) {
                 lastGeneratedAt = Files.getLastModifiedTime(file).toInstant();
+            } else {
+                // no tileset yet: let the scheduled check build the first one
+                dataChanged.set(true);
             }
         } catch (IOException e) {
             log.warn("Could not read existing tile file timestamp", e);

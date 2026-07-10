@@ -33,6 +33,7 @@ public class DetourAnalysisScheduler {
     private final DetourAnalysisService detourAnalysisService;
     private final Executor analysisExecutor;
     private final PipelineWorkClaimService workClaimService;
+    private final TileBuildService tileBuildService;
 
     @Value("${pipeline.enabled:true}")
     private boolean pipelineEnabled;
@@ -55,11 +56,13 @@ public class DetourAnalysisScheduler {
     public DetourAnalysisScheduler(RideRepository rideRepository,
                                    DetourAnalysisService detourAnalysisService,
                                    @Qualifier("analysisExecutor") Executor analysisExecutor,
-                                   PipelineWorkClaimService workClaimService) {
+                                   PipelineWorkClaimService workClaimService,
+                                   TileBuildService tileBuildService) {
         this.rideRepository = rideRepository;
         this.detourAnalysisService = detourAnalysisService;
         this.analysisExecutor = analysisExecutor;
         this.workClaimService = workClaimService;
+        this.tileBuildService = tileBuildService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -129,6 +132,10 @@ public class DetourAnalysisScheduler {
                 formatDuration(totalDuration),
                 String.format("%.1f", ridesPerSec),
                 pendingAfterBatch);
+
+        if (completedCount.get() > 0) {
+            tileBuildService.markDataChanged();
+        }
     }
 
     /**

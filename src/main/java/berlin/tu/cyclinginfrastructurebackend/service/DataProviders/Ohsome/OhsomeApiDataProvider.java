@@ -18,11 +18,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -88,6 +91,13 @@ public class OhsomeApiDataProvider {
                 }
             }
         } catch (RestClientResponseException e) {
+            if (e.getStatusCode() == HttpStatus.FORBIDDEN) {
+                Instant retryAt = nextUtcDay();
+                log.warn("Ohsome API returned 403 Forbidden for event {}; the server has likely "
+                        + "blocked this client for excessive use. Pausing until {}.",
+                        event.getId(), retryAt);
+                throw new ApiRateLimitException("Ohsome API access forbidden (client blocked)", retryAt, e);
+            }
             if (isRateLimited(e)) {
                 Instant retryAt = parseRetryAfter(e);
                 log.warn("Ohsome API rate limit hit for event {}: {}. Backing off{}.",
@@ -106,6 +116,19 @@ public class OhsomeApiDataProvider {
     private boolean isRateLimited(RestClientResponseException e) {
         return e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS
                 || e.getStatusCode() == HttpStatus.SERVICE_UNAVAILABLE;
+    }
+
+    /**
+     * A 403 from the public ohsome instance is its web server blocking the client
+     * (typically an IP-level block after excessive use), not a per-request failure;
+     * continuing to send requests only reinforces the block. There is no documented
+     * reset time, so wait until the next UTC day before probing again.
+     *
+     * @return the start of the next UTC day, with a small buffer
+     */
+    private Instant nextUtcDay() {
+        return Instant.now().atZone(ZoneOffset.UTC).truncatedTo(ChronoUnit.DAYS)
+                .plusDays(1).toInstant().plus(Duration.ofMinutes(5));
     }
 
     /**
