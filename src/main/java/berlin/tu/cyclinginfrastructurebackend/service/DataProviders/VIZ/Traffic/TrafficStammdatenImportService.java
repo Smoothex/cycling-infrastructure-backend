@@ -1,4 +1,4 @@
-package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.BerlinTraffic;
+package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.Traffic;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.TrafficDetector;
 import berlin.tu.cyclinginfrastructurebackend.repository.TrafficDetectorRepository;

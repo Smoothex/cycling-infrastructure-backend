@@ -75,20 +75,21 @@ The detector metadata (station locations, road names, directions) is downloaded 
 
 ---
 
-## Berlin Open Data — Road Closures
+## VIZ — Road Closures & Construction Sites
 
-**Source:** [Baustellen, Sperrungen und sonstige Störungen von besonderem verkehrlichem Interesse](https://daten.berlin.de/datensaetze/baustellen-sperrungen-und-sonstige-storungen-von-besonderem-verkehrlichem-interesse)
+**Source:** VIZ (Verkehrsinformationszentrale Berlin) live dataset `https://api.viz.berlin.de/daten/baustellen_sperrungen_viz.json` (dataset description: [Baustellen, Sperrungen und sonstige Störungen von besonderem verkehrlichem Interesse](https://daten.berlin.de/datensaetze/baustellen-sperrungen-und-sonstige-storungen-von-besonderem-verkehrlichem-interesse))
 
-Loads a local JSON file from the Berlin Open Data portal containing historical road closures and construction zones. For each segment event, a spatial check determines whether the event's location overlaps with any active closure at the time of the ride.
+Downloads the VIZ JSON containing road closures and construction zones automatically at startup. For each segment event, a spatial check determines whether the event's location overlaps with any active closure at the time of the ride.
 
 Events near a closure are flagged with `ExternalFactorType.ROAD_CLOSURE`. This helps distinguish infrastructure avoidance from temporary disruptions.
 
-The file must be downloaded separately and placed at the configured path. It is not fetched automatically.
+Each successful download refreshes a local cache file; if the API is unreachable at startup, the cached copy from the previous run is used. If neither is available, road-closure enrichment is disabled for that run.
 
 | Property | Default |
 |---|---|
 | `pipeline.enrichment.berlin-open-data.batch-size` | `2500` |
-| `enrichment.berlin-open-data.file-path` | `./data/berlinOpenData/baustellen_sperrungen.json` |
+| `enrichment.berlin-open-data.url` | `https://api.viz.berlin.de/daten/baustellen_sperrungen_viz.json` |
+| `enrichment.berlin-open-data.cache-file` | `./data/berlinOpenData/cache/baustellen_sperrungen_viz.json` |
 | `pipeline.enrichment.berlin-open-data.delay-ms` | `60000` |
 
 ---
