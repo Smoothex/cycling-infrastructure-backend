@@ -307,40 +307,25 @@ Event distribution broken down by a dimension (e.g. `HOUR_OF_DAY`, `DAY_OF_WEEK`
 ]
 ```
 
-**`GET /api/analytics/time-series`**  
-Avoidance and preference event counts aggregated by month or week over a time range.
+**`GET /api/analytics/context`**  
+Filter-aware evidence context for the planner analytics tab. Supports `from`, `to`, and `rideIntent`.
 
 ```json
-[
-    {
-        "bucketStartEpochMillis": 1640991600000,
-        "label": "Jan 2022",
-        "totalCount": 9318,
-        "avoidanceCount": 3899,
-        "preferenceCount": 5419,
-        "avoidanceShare": 0.4184,
-        "preferenceShare": 0.5816
-    },
-    {
-        "bucketStartEpochMillis": 1643670000000,
-        "label": "Feb 2022",
-        "totalCount": 55904,
-        "avoidanceCount": 22668,
-        "preferenceCount": 33236,
-        "avoidanceShare": 0.4055,
-        "preferenceShare": 0.5945
-    },
-    {
-        "bucketStartEpochMillis": 1646089200000,
-        "label": "Mar 2022",
-        "totalCount": 97629,
-        "avoidanceCount": 36922,
-        "preferenceCount": 60707,
-        "avoidanceShare": 0.3782,
-        "preferenceShare": 0.6218
-    }
-]
+{
+    "matchingRideCount": 1955,
+    "matchingEventCount": 468711,
+    "avoidanceEventCount": 171423,
+    "preferenceEventCount": 297288,
+    "earliestEventTimestamp": 1615463561000,
+    "latestEventTimestamp": 1664532378000
+}
 ```
+
+**`GET /api/analytics/corridors?rank=AVOIDANCE`**  
+Ranks spatially connected, same-named street corridors by distinct rides carrying the requested signal. A ride contributes once per corridor, independent of the number of affected GraphHopper edges. Optional parameters: `limit`, `minRideCount`, `from`, `to`, and `rideIntent`. Results also include scary near misses within 25 metres as supporting safety evidence.
+
+**`GET /api/analytics/infrastructure-signals?dimension=SURFACE`**  
+Compares historical OSM infrastructure categories with the filtered avoidance-signal baseline. Supported dimensions are `SURFACE`, `SMOOTHNESS`, `CYCLEWAY_TYPE`, and `HIGHWAY`; optional parameters are `limit`, `minRideCount`, `from`, `to`, and `rideIntent`. The response includes known-attribute coverage, distinct ride-signal counts, and percentage-point difference from baseline. These are descriptive associations, not exposure-normalized avoidance probabilities.
 
 ### Tile management endpoints
 
