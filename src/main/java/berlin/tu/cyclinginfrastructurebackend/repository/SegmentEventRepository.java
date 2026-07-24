@@ -199,14 +199,6 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     );
 
     @Query("""
-            SELECT se.eventTimestamp, se.eventType FROM SegmentEvent se
-            WHERE (:eventType IS NULL OR se.eventType = :eventType)
-              AND (:from IS NULL OR se.eventTimestamp >= :from)
-              AND (:to IS NULL OR se.eventTimestamp <= :to)
-            """)
-    List<Object[]> findEventTimelineRows(SegmentEventType eventType, Long from, Long to);
-
-    @Query("""
             SELECT se.segment.id,
                    SUM(CASE WHEN se.trafficEnriched = true THEN 1 ELSE 0 END),
                    SUM(CASE WHEN se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED THEN 1 ELSE 0 END),
