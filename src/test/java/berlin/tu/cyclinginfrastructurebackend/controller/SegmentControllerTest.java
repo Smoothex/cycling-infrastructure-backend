@@ -4,7 +4,9 @@ import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.repository.IncidentRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
@@ -51,7 +53,8 @@ class SegmentControllerTest {
     @Test
     void geoJsonEndpointReturnsFeatureCollection() throws Exception {
         when(segmentRepository.findSegmentsForMap(
-                0.2, 0.2, 1, false, 0L, Long.MAX_VALUE, false, false, false, false, 1000))
+                0.2, 0.2, 1, false, 0L, Long.MAX_VALUE, false, false, false, false,
+                "", "", 1000))
                 .thenReturn(List.of());
         when(geoJsonMapper.toSegmentFeatureCollection(eq(List.of()), any())).thenReturn(
                 new GeoJsonFeatureCollectionDto("FeatureCollection", List.of())
@@ -60,6 +63,32 @@ class SegmentControllerTest {
         mockMvc.perform(get("/api/segments/geojson"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.type").value("FeatureCollection"));
+    }
+
+    @Test
+    void geoJsonEndpointForwardsCombinedFilters() throws Exception {
+        when(segmentRepository.findSegmentsForMap(
+                0.2, 0.2, 1, true, 100L, 200L,
+                true, false, false, true,
+                "COMMUTE", "HEAVY", 1000
+        )).thenReturn(List.of());
+        when(geoJsonMapper.toSegmentFeatureCollection(eq(List.of()), any())).thenReturn(
+                new GeoJsonFeatureCollectionDto("FeatureCollection", List.of())
+        );
+
+        mockMvc.perform(get("/api/segments/geojson")
+                        .param("from", "100")
+                        .param("to", "200")
+                        .param("rideIntent", "COMMUTE")
+                        .param("trafficCondition", "HEAVY")
+                        .param("enrichmentFilters", "WEATHER_ENRICHED", "TRAFFIC_MEASURED"))
+                .andExpect(status().isOk());
+
+        verify(segmentRepository).findSegmentsForMap(
+                0.2, 0.2, 1, true, 100L, 200L,
+                true, false, false, true,
+                "COMMUTE", "HEAVY", 1000
+        );
     }
 
     @Test
@@ -79,6 +108,8 @@ class SegmentControllerTest {
                 eq(false),
                 eq(false),
                 eq(false),
+                eq(null),
+                eq(null),
                 pageableCaptor.capture()
         );
         assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(1000);
@@ -106,7 +137,8 @@ class SegmentControllerTest {
         when(segmentRepository.existsById(42L)).thenReturn(true);
         when(eventRepository.findSegmentEventsForApi(
                 eq(42L), eq(null), eq(null), eq(null),
-                eq(false), eq(false), eq(false), eq(false), any(Pageable.class)))
+                eq(false), eq(false), eq(false), eq(false),
+                eq(null), eq(null), any(Pageable.class)))
                 .thenReturn(List.of(event));
 
         mockMvc.perform(get("/api/segments/42/events"))
@@ -115,5 +147,44 @@ class SegmentControllerTest {
                 .andExpect(jsonPath("$[0].weatherEnriched").value(true))
                 .andExpect(jsonPath("$[0].ohsomeEnriched").value(true))
                 .andExpect(jsonPath("$[0].trafficEnriched").value(true));
+    }
+
+    @Test
+    void suspiciousSegmentsEndpointForwardsCombinedFilters() throws Exception {
+        when(segmentRepository.findSuspiciousSegments(
+                0.2, 10, true, 100L, 200L,
+                true, false, false, true,
+                "COMMUTE", "HEAVY", 50
+        )).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/segments")
+                        .param("from", "100")
+                        .param("to", "200")
+                        .param("rideIntent", "COMMUTE")
+                        .param("trafficCondition", "HEAVY")
+                        .param("enrichmentFilters", "WEATHER_ENRICHED", "TRAFFIC_MEASURED"))
+                .andExpect(status().isOk());
+
+        verify(segmentRepository).findSuspiciousSegments(
+                0.2, 10, true, 100L, 200L,
+                true, false, false, true,
+                "COMMUTE", "HEAVY", 50
+        );
+    }
+
+    @Test
+    void segmentEventsEndpointForwardsRideIntentAndTrafficCondition() throws Exception {
+        when(segmentRepository.existsById(42L)).thenReturn(true);
+
+        mockMvc.perform(get("/api/segments/42/events")
+                        .param("rideIntent", "COMMUTE")
+                        .param("trafficCondition", "HEAVY"))
+                .andExpect(status().isOk());
+
+        verify(eventRepository).findSegmentEventsForApi(
+                eq(42L), eq(null), eq(null), eq(null),
+                eq(false), eq(false), eq(false), eq(false),
+                eq(RideIntent.COMMUTE), eq(TrafficCondition.HEAVY), any(Pageable.class)
+        );
     }
 }

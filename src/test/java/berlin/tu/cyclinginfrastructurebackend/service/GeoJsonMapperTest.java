@@ -25,7 +25,7 @@ class GeoJsonMapperTest {
         segment.setAvoidanceCount(5);
         segment.setPreferenceCount(2);
         segment.setAvoidanceRatio(0.33);
-        segment.setPreferenceRatio(0.17);
+        segment.setPreferenceRatio(0.2);
         segment.setGradientPercent(1.5);
         segment.setGeometry(geometryFactory.createLineString(new Coordinate[]{
                 new Coordinate(13.1, 52.1),
@@ -39,6 +39,6 @@ class GeoJsonMapperTest {
         assertThat(collection.features().getFirst().geometry().type()).isEqualTo("LineString");
         assertThat(collection.features().getFirst().properties())
                 .containsEntry("id", 42L)
-                .containsEntry("totalObservationCount", 17);
+                .containsEntry("totalObservationCount", 15);
     }
 }

@@ -63,6 +63,6 @@ public class GeoJsonMapper {
     }
 
     private int totalObservationCount(StreetSegment segment) {
-        return segment.getUsageCount() + segment.getAvoidanceCount() + segment.getPreferenceCount();
+        return segment.getUsageCount() + segment.getAvoidanceCount();
     }
 }

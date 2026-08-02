@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -187,7 +188,7 @@ public class ApiAnalyticsService {
                 asLong(row[1]), asLong(row[2]), asLong(row[3]), asLong(row[4]),
                 asLong(row[5]), asLong(row[11]),
                 asDouble(row[6]), asDouble(row[7]), asDouble(row[8]), asDouble(row[9]),
-                asNullableLong(row[10]))).toList();
+                asNullableLong(row[10]), commaSeparatedLongs(row[12]))).toList();
     }
 
     public InfrastructureSignalsDto getInfrastructureSignals(AnalysisDimension dimension,
@@ -323,6 +324,15 @@ public class ApiAnalyticsService {
 
     private String enumName(Enum<?> value) {
         return value != null ? value.name() : "";
+    }
+
+    private List<Long> commaSeparatedLongs(Object value) {
+        if (value == null || value.toString().isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.toString().split(","))
+                .map(Long::valueOf)
+                .toList();
     }
 
     private void appendFilters(StringBuilder jpql, Long from, Long to, SegmentEventType eventType,

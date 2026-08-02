@@ -36,11 +36,15 @@ flowchart LR
 
 ## Analysis Steps
 
-### 1. Shortest Path Computation
+### 1. Origin--Destination Distance Filter
 
-GraphHopper computes the shortest path (by distance) between the first and last GPS points of the ride. Both the actual traversed edge IDs and the shortest path edge IDs are stored per ride.
+Before map matching, the geodesic distance between the first and last valid GPS points is calculated. Rides whose origin and destination are less than **500 meters** apart (`analysis.minimum-origin-destination-distance-meters=500`) are stored with `SKIPPED` status and excluded from map matching, usage counting, and detour analysis. This prevents round trips and recreational loops with an almost zero-length reference route from producing disproportionate preference signals.
 
-### 2. Detour Detection
+### 2. Reference Path Computation
+
+For eligible rides, GraphHopper computes the distance-prioritized shortest path between the first and last GPS points. Both the actual traversed edge IDs and the reference path edge IDs are stored per ride.
+
+### 3. Detour Detection
 
 A ride is a detour if:
 
@@ -50,19 +54,19 @@ actual_distance > shortest_path_distance × (1 + threshold)
 
 The threshold defaults to **10%** (`analysis.detour.threshold=0.10`). Rides within 10% of the shortest path are considered non-detours and generate no avoidance or preference events.
 
-### 3. Alternative Route Filtering
+### 4. Alternative Route Filtering
 
 Not every detour means the cyclist avoided specific segments — sometimes they took a completely different path (different neighborhood, different corridor). These are classified as **ALTERNATIVE_ROUTE** and skipped from event generation.
 
 Detection: if fewer than 30% of the shortest path edges spatially overlap with the actual route, it's an alternative route, not a local detour.
 
-### 4. Spatial Edge Filtering
+### 5. Spatial Edge Filtering
 
 GraphHopper sometimes assigns different edge IDs to physically adjacent paths (e.g., a segregated cycle path runs parallel to the road it serves). To avoid false avoidances, edges that are within **20 meters** (`analysis.spatial.proximity-meters`) of the actual trajectory are excluded from the avoided set — even if they're different edge IDs.
 
 This uses a PostGIS `ST_DWithin` query in meters.
 
-### 5. Event Registration
+### 6. Event Registration
 
 For detour rides, two sets of events are created:
 
@@ -131,5 +135,6 @@ Detour analysis runs one GraphHopper routing query and several database round tr
 | `pipeline.analysis.delay-ms` | `10000` | Polling interval (ms) |
 | `pipeline.analysis.batch-size` | `500` | Rides claimed per batch |
 | `pipeline.analysis.thread-pool-size` | `8` | Parallel GraphHopper workers |
+| `analysis.minimum-origin-destination-distance-meters` | `500` | Minimum geodesic distance between the first and last valid GPS points |
 | `analysis.detour.threshold` | `0.10` | Detour detection threshold (10%) |
 | `analysis.spatial.proximity-meters` | `20` | Parallel path tolerance (meters) |
