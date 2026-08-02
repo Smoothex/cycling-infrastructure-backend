@@ -94,10 +94,12 @@ One record per GraphHopper road network edge. The `id` is the GraphHopper edge I
 | `avoidanceCount` | int | Times a ride avoided this segment (it was on shortest path but bypassed) |
 | `preferenceCount` | int | Times a ride chose this segment (it was NOT on shortest path) |
 | `avoidanceRatio` | double | `avoidanceCount / (avoidanceCount + usageCount)` |
-| `preferenceRatio` | double | `preferenceCount / (preferenceCount + usageCount)` |
+| `preferenceRatio` | double | `preferenceCount / usageCount`; preferred traversals are a subset of usage |
 | `gradientPercent` | double | Elevation gradient derived from DEM data |
 
 Ratios are recomputed in-place on every increment — they are always consistent with the counts.
+
+No secondary indices beyond the primary key — lookups are by `id` (the GraphHopper edge ID) or via `segment_events`/`segment_external_factors`, which are themselves indexed on `segment_id`.
 
 ---
 
@@ -109,12 +111,19 @@ One record per avoidance or preference observation. This is the primary analytic
 
 | Field | Type | Description |
 |---|---|---|
+| `id` | UUID | Primary key |
+| `segmentId` | long (FK) | The `street_segments` row this event belongs to |
+| `rideId` | UUID (FK) | The `rides` row this event was generated from |
 | `eventType` | enum | `AVOIDANCE` or `PREFERENCE` |
 | `eventTimestamp` | epoch ms | When the rider was near this edge |
 | `dayOfWeek` | enum | Pre-computed from `eventTimestamp` in Berlin timezone |
 | `hourOfDay` | int | Pre-computed hour (0–23) in Berlin timezone |
 | `rideIntent` | enum | Copied from the ride at event creation time |
 | `pathBearingDegrees` | double | Compass direction the cyclist was heading on this edge |
+
+Note: `bikeType` appears in the REST API's event JSON (see [data-export.md](data-export.md)) but is not a `segment_events` column — it's read from the joined `Ride` at serialization time.
+
+Indexed on `segment_id`, `eventTimestamp`, `eventType`, and `cyclewayType` — the first three back the common per-segment/time-range/type lookups; the `cyclewayType` index backs the infrastructure-signals analytics query.
 
 **Enrichment status fields** (one pair per source):
 
@@ -153,7 +162,30 @@ Stores segment-level external conditions (weather events, road closures, constru
 | `affectedArea` | Geometry (4326) | Optional spatial extent (e.g. construction site polygon) |
 | `metadata` | jsonb | Source-specific attributes without a fixed schema |
 
-A unique constraint on `(segment_id, factorType, source, validFrom)` prevents duplicate factor records.
+A unique constraint on `(segment_id, factorType, source, validFrom)` prevents duplicate factor records. Indexed on `segment_id`, `factorType`, and `(validFrom, validTo)` — the last backs the `/api/segments/{id}/factors` overlap query.
+
+---
+
+### `road_closures`
+
+One entry per feature in the VIZ Berlin Baustellen/Sperrungen (construction/closures) live feed, imported by `RoadClosureImportService`. The feed is a snapshot of currently active and planned entries; imports upsert by `feedId` and never delete, so this table accumulates history — rows that disappear from a later feed version simply stop being updated (`lastSeenAt` stalls) rather than being removed. This is distinct from `segment_external_factors`: the enrichment pipeline reads this table to attach `SegmentExternalFactor` rows to nearby segment events, while `GET /api/road-closures` (see [data-export.md](data-export.md)) exposes these rows directly for map display.
+
+| Field | Type | Description |
+|---|---|---|
+| `feedId` | string (unique) | The feed's own identifier (e.g. `"8/2025"`); import upsert key |
+| `lmsId` | string | Feed-internal LMS identifier |
+| `factorType` | enum | Mapped from the feed's `subtype` — see below |
+| `severity` | enum | `NO_CLOSURE`, `FULL_CLOSURE`, `DIRECTIONAL_CLOSURE`, `UNKNOWN` |
+| `direction` | string | Affected direction, if applicable |
+| `street` | string | Street name |
+| `section` | text | Description of the affected stretch |
+| `content` | text | Free-text description from the feed |
+| `validFrom` / `validTo` | epoch ms | Validity window; `validTo` may be null (open-ended) |
+| `geometry` | Geometry (4326) | Usually a `GeometryCollection` of one label `Point` plus affected-stretch `LineString`s |
+| `tstore` | epoch ms | The feed's own last-modified timestamp for this entry |
+| `firstSeenAt` / `lastSeenAt` | epoch ms | When this import service first/last saw the entry |
+
+`factorType` is derived from the feed's `subtype` property: `"Baustelle"`/`"Bauarbeiten"` → `CONSTRUCTION`, `"Sperrung"` → `ROAD_CLOSURE`, `"Störung"` → `EVENT`, `"Gefahr"` → `HAZARD`, `"Unfall"` → `INCIDENT`; anything else (including a missing `subtype`) falls back to `ROAD_CLOSURE`.
 
 ---
 
@@ -173,6 +205,8 @@ Reference table for Berlin's induction loop traffic sensor network. Populated on
 | `location` | Point (4326) | Sensor location |
 | `activeFrom` / `activeTo` | date | Operational period |
 | `deinstalled` | boolean | Whether the sensor has been removed |
+
+Indexed on `detId15`, `detNameAlt` (also unique), `mqKurzname`, and `street`.
 
 ---
 

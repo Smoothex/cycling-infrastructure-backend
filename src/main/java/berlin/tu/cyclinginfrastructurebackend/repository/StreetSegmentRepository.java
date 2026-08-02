@@ -17,14 +17,26 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     @Transactional
     @Query("UPDATE StreetSegment s SET s.usageCount = s.usageCount + 1, " +
             "s.avoidanceRatio = CAST(s.avoidanceCount AS double) / (s.usageCount + 1 + s.avoidanceCount), " +
-            "s.preferenceRatio = CAST(s.preferenceCount AS double) / (s.usageCount + 1 + s.preferenceCount) " +
+            "s.preferenceRatio = CAST(s.preferenceCount AS double) / (s.usageCount + 1) " +
             "WHERE s.id = :id")
     int incrementUsage(Long id);
 
     /**
+     * Pre-locks rows in ascending id order before any batched increments. If a
+     * transaction calls both incrementAvoidanceAll and incrementPreferenceAll,
+     * call this first with the union of their ids: each of those methods only
+     * orders locks within its own call, so back-to-back calls could still lock
+     * out of order across two transactions and deadlock.
+     */
+    @Query(value = "SELECT id FROM street_segments WHERE id IN :ids ORDER BY id FOR UPDATE", nativeQuery = true)
+    List<Long> lockForUpdate(Collection<Long> ids);
+
+    /**
      * Set-based increment for a whole batch of segments in one round trip. The
-     * FOR UPDATE subquery locks the rows in ascending id order, preserving the
-     * in order to prevent deadlock.
+     * FOR UPDATE subquery locks the rows in ascending id order, preserving that
+     * order to prevent deadlock between concurrent calls to this same method.
+     * See {@link #lockForUpdate} for the cross-method deadlock this alone does
+     * not prevent.
      */
     @Modifying
     @Transactional
@@ -38,13 +50,18 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
         """, nativeQuery = true)
     int incrementAvoidanceAll(Collection<Long> ids);
 
+    /**
+     * See {@link #incrementAvoidanceAll} and {@link #lockForUpdate}: this method's
+     * own ORDER BY only orders locks relative to itself, not relative to a prior
+     * incrementAvoidanceAll call in the same transaction.
+     */
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE street_segments s
         SET preference_count = s.preference_count + 1,
             preference_ratio = CAST(s.preference_count + 1 AS double precision)
-                               / (s.usage_count + s.preference_count + 1)
+                               / NULLIF(s.usage_count, 0)
         FROM (SELECT id FROM street_segments WHERE id IN :ids ORDER BY id FOR UPDATE) locked
         WHERE s.id = locked.id
         """, nativeQuery = true)
@@ -68,9 +85,9 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
 
     /**
      * Segments with highest avoidance ratio, filtered by minimum total observations to
-     * reduce noise. When event-level criteria are active (time window and/or enrichment
-     * filters), a segment qualifies only if at least one of its events matches all of
-     * them at once. trafficMeasured means an attached detector measurement
+     * reduce noise. When event-level criteria are active, a segment qualifies only if
+     * at least one event matches the entire time, enrichment, ride-intent, and traffic
+     * condition set. trafficMeasured means an attached detector measurement
      * (traffic_enrichment_status = 'ENRICHED'), matching the per-segment
      * trafficMeasuredEventCount and the tile export semantics.
      */
@@ -86,7 +103,9 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                       AND (:weatherEnriched = false OR e.weather_enriched)
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
-                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
+                      AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
             ORDER BY s.avoidance_ratio DESC
             LIMIT :limit
             """, nativeQuery = true)
@@ -100,19 +119,21 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            String rideIntent,
+            String trafficCondition,
             int limit
     );
 
     @Query("""
             SELECT COUNT(s) FROM StreetSegment s
-            WHERE (s.usageCount + s.avoidanceCount + s.preferenceCount) > 0
+            WHERE (s.usageCount + s.avoidanceCount) > 0
             """)
     long countObservedSegments();
 
     @Query(value = """
             SELECT * FROM street_segments s
             WHERE s.geometry IS NOT NULL
-              AND (s.usage_count + s.avoidance_count + s.preference_count) >= :minSampleSize
+              AND (s.usage_count + s.avoidance_count) >= :minSampleSize
               AND (
                     COALESCE(s.avoidance_ratio, 0) >= :minAvoidanceRatio
                  OR COALESCE(s.preference_ratio, 0) >= :minPreferenceRatio
@@ -125,9 +146,11 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                       AND (:weatherEnriched = false OR e.weather_enriched)
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
-                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
+                      AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
             ORDER BY GREATEST(COALESCE(s.avoidance_ratio, 0), COALESCE(s.preference_ratio, 0)) DESC,
-                     (s.usage_count + s.avoidance_count + s.preference_count) DESC
+                     (s.usage_count + s.avoidance_count) DESC
             LIMIT :limit
             """, nativeQuery = true)
     List<StreetSegment> findSegmentsForMap(
@@ -141,13 +164,15 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            String rideIntent,
+            String trafficCondition,
             int limit
     );
 
     @Query(value = """
             SELECT * FROM street_segments s
             WHERE s.geometry IS NOT NULL
-              AND (s.usage_count + s.avoidance_count + s.preference_count) >= :minSampleSize
+              AND (s.usage_count + s.avoidance_count) >= :minSampleSize
               AND (
                     COALESCE(s.avoidance_ratio, 0) >= :minAvoidanceRatio
                  OR COALESCE(s.preference_ratio, 0) >= :minPreferenceRatio
@@ -160,7 +185,9 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                       AND (:weatherEnriched = false OR e.weather_enriched)
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
-                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')))
+                      AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
+                      AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
               AND ST_Intersects(
                     s.geometry,
                     ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326)
@@ -179,6 +206,8 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            String rideIntent,
+            String trafficCondition,
             double minLon,
             double minLat,
             double maxLon,
@@ -202,9 +231,9 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
     /**
      * Ranks same-named street corridors (spatially connected clusters of segments sharing
      * a street name, via ST_ClusterDBSCAN) by distinct rides carrying an avoidance or
-     * preference signal within the given window. Each row's geometry bbox and top-segment
-     * id let the frontend fit the map to the corridor and pre-select a representative
-     * segment. rank selects both the qualifying threshold (:minRideCount) and the sort/mode
+     * preference signal within the given window. Each row's geometry bbox, top-segment id,
+     * and complete ordered segment-id set let the frontend fit and highlight the corridor.
+     * rank selects both the qualifying threshold (:minRideCount) and the sort/mode
      * tie-break column; scary_incidents counts nearby (25m) incidents flagged scary within
      * the same time window and ride-intent filter.
      */
@@ -235,6 +264,7 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                        MIN(street_name) AS street_name,
                        corridor_cluster,
                        COUNT(*) AS segment_count,
+                       STRING_AGG(id::text, ',' ORDER BY id) AS segment_ids,
                        ST_UnaryUnion(ST_Collect(geometry)) AS geometry,
                        ST_XMin(ST_Extent(geometry)) AS min_lon,
                        ST_YMin(ST_Extent(geometry)) AS min_lat,
@@ -283,7 +313,8 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
                    COUNT(DISTINCT i.id) FILTER (
                        WHERE i.scary = true
                          AND (:rideIntent = '' OR ir.ride_intent = :rideIntent)
-                   ) AS scary_incidents
+                   ) AS scary_incidents,
+                   c.segment_ids
             FROM candidates c
             LEFT JOIN incidents i
               ON i.location IS NOT NULL
@@ -292,7 +323,8 @@ public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Lo
             LEFT JOIN rides ir ON ir.id = i.ride_id
             GROUP BY c.street_name, c.avoidance_rides, c.preference_rides,
                      c.avoidance_events, c.preference_events, c.segment_count,
-                     c.min_lon, c.min_lat, c.max_lon, c.max_lat, c.top_segment_id
+                     c.min_lon, c.min_lat, c.max_lon, c.max_lat, c.top_segment_id,
+                     c.segment_ids
             ORDER BY CASE WHEN :rank = 'PREFERENCE' THEN c.preference_rides ELSE c.avoidance_rides END DESC,
                      CASE WHEN :rank = 'PREFERENCE' THEN c.preference_events ELSE c.avoidance_events END DESC,
                      c.street_name

@@ -15,6 +15,8 @@ CORS is configured via `app.cors.allowed-origins` (defaults: `localhost:4200`, `
 **`GET /api/segments`**  
 Returns segments ranked by avoidance ratio, with optional filtering. Used to surface the most problematic infrastructure.
 
+Params: `minAvoidanceRatio` (default `0.2`), `minSampleSize` (default `10`), `limit` (default `50`, clamped to `[1, 10000]`), `from`/`to` (epoch ms), `rideIntent`, `trafficCondition`, `enrichmentFilters` (repeatable, one or more of `TRAFFIC_ENRICHED`, `WEATHER_ENRICHED`, `OHSOME_ENRICHED`, `TRAFFIC_MEASURED`). The sample size and `totalObservationCount` are `usageCount + avoidanceCount`; preference observations are already included in usage and are not added again. When any event-level filter (`from`/`to`/`rideIntent`/`trafficCondition`/`enrichmentFilters`) is set, a segment qualifies if **at least one** of its events matches *all* of the active filters at once — filters are ANDed within an event, but a segment needs only one matching event, not all of them.
+
 ```json
 {
     "id": 27074352,
@@ -47,6 +49,8 @@ Returns segments ranked by avoidance ratio, with optional filtering. Used to sur
 
 **`GET /api/segments/geojson`**  
 Returns segments as a GeoJSON FeatureCollection, supporting spatial and metric filters (bounding box, minimum observation count, etc.). Used by the frontend map for on-demand queries.
+
+Params: `minAvoidanceRatio` / `minPreferenceRatio` (default `0.2` each), `minSampleSize` (default `1`), `bbox` (optional `"minLon,minLat,maxLon,maxLat"`; a malformed or inverted bbox returns `400`), `limit` (default `1000`, clamped to `[1, 10000]`), and the same `from`/`to`/`rideIntent`/`trafficCondition`/`enrichmentFilters` event-level filters as `GET /api/segments`, with the same "any matching event qualifies the segment" semantics.
 
 ```json
 {
@@ -127,7 +131,11 @@ Returns a single segment with usage/avoidance/preference counts and ratios, grad
 ```
 
 **`GET /api/segments/{id}/events`**  
-Returns individual `SegmentEvent` records — each avoidance or preference observation with its enrichment data. Example of a fully enriched event (weather + traffic):
+Returns individual `SegmentEvent` records — each avoidance or preference observation with its enrichment data. `404` if the segment doesn't exist.
+
+Params: `eventType`, `from`/`to`, `rideIntent`, `trafficCondition`, `enrichmentFilters` (same values as `GET /api/segments`), `limit` (default `100`, clamped to `[1, 1000]`). Always returns a single page starting at offset 0 — there is no cursor/offset parameter, so a segment with more than 1000 matching events cannot be paged through this endpoint.
+
+Example of a fully enriched event (weather + traffic):
 
 ```json
 {
@@ -173,7 +181,9 @@ Returns individual `SegmentEvent` records — each avoidance or preference obser
 ```
 
 **`GET /api/segments/{id}/factors`**  
-Returns `SegmentExternalFactor` records — segment-level conditions with validity time windows.
+Returns `SegmentExternalFactor` records — segment-level conditions with validity time windows. `404` if the segment doesn't exist.
+
+Params: `factorType` (optional), `from`/`to` (optional). The three are mutually exclusive in effect, checked in this order: if **both** `from` and `to` are set, returns factors whose validity window overlaps `[from, to]`; else if `factorType` is set, returns factors of that type only; else returns all factors for the segment. Setting only one of `from`/`to` (not both) does not filter by time at all — it silently falls through to the `factorType`/all-factors branch.
 
 ```json
 [
@@ -191,6 +201,76 @@ Returns `SegmentExternalFactor` records — segment-level conditions with validi
         }
     }
 ]
+```
+
+### Map layer endpoints
+
+These three endpoints serve reference/overlay data as plain JSON. They are independent of the PMTiles vector-tile pipeline (see [Vector Tiles](#vector-tiles) below) — the frontend map renders them as separate GeoJSON-ish overlay layers.
+
+**`GET /api/road-closures?from=&to=`**  
+Road closures and construction sites from the VIZ Berlin Baustellen/Sperrungen feed (`road_closures` table). The feed is a live snapshot: imports upsert by feed ID and never delete, so this table accumulates history rather than reflecting only current closures. `from`/`to` are optional epoch-ms bounds; a closure is returned when its validity window overlaps them (open-ended closures — no `validTo` — overlap everything after their start). This is a different, simpler mechanism than the VIZ enrichment described in [external-enrichments.md](external-enrichments.md): the enrichment attaches `SegmentExternalFactor` records to nearby events, while this endpoint exposes the raw closure records for map display.
+
+```json
+[
+    {
+        "id": "8f6b1e2a-...",
+        "factorType": "CONSTRUCTION",
+        "severity": "DIRECTIONAL_CLOSURE",
+        "direction": "beide Richtungen",
+        "street": "Torstraße",
+        "section": "zwischen Rosenthaler Straße und Tucholskystraße",
+        "content": "Fahrbahnerneuerung",
+        "validFrom": 1735689600000,
+        "validTo": null,
+        "lon": 13.4013,
+        "lat": 52.5289,
+        "lines": [[[13.4010, 52.5288], [13.4016, 52.5290]]]
+    }
+]
+```
+
+**`GET /api/incidents/near-misses?from=&to=`**  
+Self-reported SimRa incidents flagged `scary=true` with a non-null GPS location — a proxy layer for near-misses. `from`/`to` are optional epoch-ms bounds on the incident timestamp, matching the same convention as the segment endpoints' time filters.
+
+```json
+[
+    {
+        "id": "1a2b3c4d-...",
+        "lon": 13.3908,
+        "lat": 52.5170,
+        "timestamp": 1645804575000,
+        "incidentType": "CLOSE_PASS",
+        "scary": true,
+        "description": "Car overtook too closely",
+        "involvedParticipants": ["CAR"]
+    }
+]
+```
+
+**`GET /api/traffic/detectors`**  
+All Berlin induction-loop traffic detectors from the Stammdaten import, with their WGS84 positions, plus the configured enrichment match radius so the frontend can render it. Static reference data — no time filtering.
+
+```json
+{
+    "matchRadiusMeters": 75.0,
+    "detectors": [
+        {
+            "detName": "TE501",
+            "detNameNeu": "TE501a",
+            "mqName": "MQ501",
+            "street": "Torstraße",
+            "position": "Höhe Rosenthaler Platz",
+            "positionDetail": "stadtauswärts",
+            "direction": "Ost",
+            "lane": "1",
+            "activeFrom": "2015-01-01",
+            "activeTo": null,
+            "deinstalled": false,
+            "lon": 13.4013,
+            "lat": 52.5289
+        }
+    ]
+}
 ```
 
 ### Analytics endpoints
@@ -268,7 +348,9 @@ Per-stage pipeline health: ride processing status breakdown and per-enrichment-s
 ```
 
 **`GET /api/analytics/distribution?dimension=HOUR_OF_DAY`**  
-Event distribution broken down by a dimension (e.g. `HOUR_OF_DAY`, `DAY_OF_WEEK`, `RIDE_INTENT`, `BIKE_TYPE`, `TRAFFIC_CONDITION`, `CYCLEWAY_TYPE`). Returns one entry per dimension value, sorted by total event count.
+Event distribution broken down by a dimension. Returns one entry per dimension value, sorted by total event count. Also accepts `from`, `to`, `eventType`, `rideIntent`, `trafficCondition`, `enrichmentFilters`, and `limit` (default `50`, clamped to `[1, 200]`).
+
+Supported `dimension` values: `EVENT_TYPE`, `HOUR_OF_DAY`, `DAY_OF_WEEK`, `RIDE_INTENT`, `WIND_EXPOSURE`, `CYCLEWAY_TYPE`, `CYCLEWAY_LOCATION`, `HIGHWAY`, `SURFACE`, `SMOOTHNESS`, `LIT`, `WEATHER_CODE`, `TRAFFIC_CONDITION`, plus six synthetic bucket dimensions computed inline by the query rather than stored as columns: `PRECIPITATION_BUCKET`, `TEMPERATURE_BUCKET`, `WIND_SPEED_BUCKET`, `GRADIENT_BUCKET`, `TRAFFIC_VOLUME_BUCKET`, `TRAFFIC_SPEED_BUCKET`. Bucket edges are fixed in the query and not caller-configurable; null values group under the literal string `"UNKNOWN"`.
 
 ```json
 [
@@ -322,7 +404,48 @@ Filter-aware evidence context for the planner analytics tab. Supports `from`, `t
 ```
 
 **`GET /api/analytics/corridors?rank=AVOIDANCE`**  
-Ranks spatially connected, same-named street corridors by distinct rides carrying the requested signal. A ride contributes once per corridor, independent of the number of affected GraphHopper edges. Optional parameters: `limit`, `minRideCount`, `from`, `to`, and `rideIntent`. Results also include scary near misses within 25 metres as supporting safety evidence.
+Ranks spatially connected, same-named street corridors by distinct rides carrying the requested signal. Same-named segments are clustered spatially (`ST_ClusterDBSCAN`, 75 m gap tolerance), so a street with a physical gap in coverage becomes two separate corridors. A ride contributes once per corridor, independent of the number of affected GraphHopper edges. Parameters: `rank` (`AVOIDANCE` or `PREFERENCE`, default `AVOIDANCE`), `limit` (default `8`, clamped to `[1, 50]`), `minRideCount` (default `5`, floored at `1` — filters on ride count, not event count), `from`, `to`, `rideIntent`.
+
+`scaryIncidentCount` comes from a separate spatial join against `incidents` within 25 metres of the corridor's unioned geometry (filtered by `scary=true`, the same time window, and the incident's own ride intent) — it is not derived from the corridor's avoidance/preference events. `topSegmentId` is the statistical mode of segment IDs among the corridor's events of the ranked type (the single most-touched segment); `segmentIds` lists every segment ID in the corridor.
+
+```json
+[
+    {
+        "streetName": "Torstraße",
+        "avoidanceRideCount": 214,
+        "preferenceRideCount": 12,
+        "avoidanceEventCount": 631,
+        "preferenceEventCount": 18,
+        "segmentCount": 9,
+        "scaryIncidentCount": 3,
+        "minLon": 13.3908,
+        "minLat": 52.5286,
+        "maxLon": 13.4110,
+        "maxLat": 52.5299,
+        "topSegmentId": 27424450,
+        "segmentIds": [27424448, 27424449, 27424450, 27424451]
+    }
+]
+```
+
+**`GET /api/analytics/corridor-geometry?streetName=&minLon=&minLat=&maxLon=&maxLat=`**  
+Resolves the exact GraphHopper edge geometry for a corridor, for map highlighting. Unlike `/corridors`, this reads directly from GraphHopper's in-memory routing graph rather than the database. All five params are required.
+
+Matching is case/whitespace-insensitive on the edge's OSM name tag. The query bbox is buffered by 75 m (the same constant used by the DB-side corridor clustering) to gather candidate edges from GraphHopper's location index, but the final intersection test uses the *unbuffered* bbox — an edge just outside the requested bbox but within the 75 m buffer is only included if it also crosses into the exact bbox. The bbox span is capped at 0.25° (~28 km at Berlin's latitude) in either axis; a larger span returns `400 Bad Request` ("corridor bounds are too large"), as does a malformed/inverted bbox ("corridor bounds are invalid") or non-finite coordinates ("corridor bounds must be finite").
+
+```json
+{
+    "streetName": "Torstraße",
+    "segmentIds": [27424448, 27424449, 27424450, 27424451],
+    "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+            [[13.3908, 52.5286], [13.3912, 52.5287]],
+            [[13.3912, 52.5287], [13.3916, 52.5288]]
+        ]
+    }
+}
+```
 
 **`GET /api/analytics/infrastructure-signals?dimension=SURFACE`**  
 Compares historical OSM infrastructure categories with the filtered avoidance-signal baseline. Supported dimensions are `SURFACE`, `SMOOTHNESS`, `CYCLEWAY_TYPE`, and `HIGHWAY`; optional parameters are `limit`, `minRideCount`, `from`, `to`, and `rideIntent`. The response includes known-attribute coverage, distinct ride-signal counts, and percentage-point difference from baseline. These are descriptive associations, not exposure-normalized avoidance probabilities.
@@ -377,36 +500,34 @@ The archive is served directly from `/api/tiles/segments.pmtiles`. The `pmtiles`
 
 ### Two-layer architecture
 
-The tile build produces a single PMTiles archive with two layers at different zoom ranges:
+The tile build produces a single PMTiles archive with two layers at disjoint zoom ranges, built from the **same** per-segment GeoJSON export (`TileExportRepository.exportSegmentFeatures`) — there is no separate street-grouped query:
 
 | Layer | Zoom range | Content | Purpose |
 |---|---|---|---|
-| `streets` | 6–12 | Segments grouped by street name, merged into (Multi)LineStrings, balance averaged across segments | City-level overview — shows which streets tend to be avoided |
-| `segments` | 9–14 | Individual segments with full metrics | Detail zoom — clickable, shows exact edge-level data |
+| `streets` | 6–12 | Individual segments, display-only (not clickable) | City-level overview — shows which streets tend to be avoided |
+| `segments` | 13–14 | Individual segments, full metrics, clickable | Detail zoom — exact edge-level data |
 
-The zoom ranges overlap at 9–12: at these levels both layers exist in the tile, and the frontend can choose which to render based on the current interaction state.
-
-**Why group by street name for the overview layer?**  
-A street like "Hauptstraße" may consist of dozens of GraphHopper edge IDs. Rendering each edge as a separate feature at zoom 10 creates visual noise and makes the color signal harder to read. Grouping merges them into one feature with an observation-weighted average balance score, giving a cleaner overview signal.
+The two ranges are **disjoint by design** — see the tile-pipeline constraints in CLAUDE.md for why identical features in overlapping zoom ranges of both layers previously caused `--drop-densest-as-needed` to empty one layer at some zooms. The frontend switches which layer it renders exactly at z13. Each layer is a separate `tippecanoe` invocation over the same input file with `--drop-densest-as-needed --coalesce-densest-as-needed`, which is what keeps the low-zoom `streets` layer visually manageable — features aren't merged by street name in SQL, tippecanoe drops/coalesces the densest ones per tile as needed to fit the size budget.
 
 ### The `balance` signal
 
-Both layers include a `balance` property computed per feature:
+Both layers include a `balance` property computed per feature, using additive smoothing (mirrors the frontend's `eventBalance()`):
 
 ```
-balance = preference_ratio - avoidance_ratio
+total = avoidanceCount + preferenceCount
+balance = total > 0
+    ? (preferenceCount - avoidanceCount) / (total + BALANCE_PRIOR_STRENGTH)
+    : 0
 ```
 
-When both ratios are present, this gives a value from −1 (pure avoidance) to +1 (pure preference). When only counts are available (no ratios yet), a count-based approximation is used:
+`BALANCE_PRIOR_STRENGTH = 5` acts as five phantom neutral events added to the denominator, so the score grows with both the one-sidedness *and* the amount of evidence, approaching but never reaching ±1 — a segment with 2 avoidance events and 0 preference events scores less extreme than one with 40 avoidance events and 0 preference events, even though both have a 100% avoidance ratio.
 
-```
-balance = (preference_count - avoidance_count) / (preference_count + avoidance_count)
-```
-
-The `bucket` property discretizes balance into named bins for frontend color mapping:
+The `bucket` property discretizes `balance` into named bins for frontend color mapping (mirrors `eventSignalBucket()`):
 
 | Bucket | Balance threshold |
 |---|---|
+| `NO_EVENTS` | no avoidance or preference events |
+| `AVOIDANCE_EXTREME` | ≤ −0.9 |
 | `AVOIDANCE_STRONG` | ≤ −0.6 |
 | `AVOIDANCE` | ≤ −0.3 |
 | `AVOIDANCE_LIGHT` | ≤ −0.1 |
@@ -414,16 +535,18 @@ The `bucket` property discretizes balance into named bins for frontend color map
 | `PREFERENCE_LIGHT` | ≥ 0.1 |
 | `PREFERENCE` | ≥ 0.3 |
 | `PREFERENCE_STRONG` | ≥ 0.6 |
-| `NO_EVENTS` | no avoidance or preference events |
+| `PREFERENCE_EXTREME` | ≥ 0.9 |
+
+Every feature also carries an all-time `eventCount`/`balance`/`bucket` plus per-calendar-year variants (`eventCount_<year>`, `bucket_<year>`, from `MIN_EXPORT_YEAR = 2015` onward) computed with the same formula scoped to that year's events, so the map can filter and color by year without a separate overlay. Years with zero events are omitted from the feature's properties (stripped via `jsonb_strip_nulls`) rather than emitted as zero.
 
 ### Tile build process
 
-1. PostGIS streams segment features as newline-delimited GeoJSON (`GeoJSONSeq`) directly to disk — geometry serialization happens in the database via `ST_AsGeoJSON`, not in Java
-2. Two files are written: one for the `streets` layer (grouped), one for the `segments` layer (per-edge)
-3. Tippecanoe is invoked as a subprocess with both files as layer inputs and zoom range parameters
+1. PostGIS streams segment features as newline-delimited GeoJSON (`GeoJSONSeq`) directly to a single file — geometry serialization happens in the database via `ST_AsGeoJSON`, not in Java
+2. Tippecanoe runs twice over that same file, once per layer, each with its own `-Z`/`-z` zoom range (and a larger `--maximum-tile-bytes` for `segments`)
+3. `tile-join` merges the two single-layer builds into one archive
 4. The output file is atomically swapped into place (`ATOMIC_MOVE`) so the running tile server never serves a partially-written file
 
-Tile builds are triggered manually via `POST /api/admin/tiles/rebuild`. Only one build can run at a time; concurrent requests return `409`.
+Tile builds are triggered by `POST /api/admin/tiles/rebuild`, and automatically at most once per `tiles.auto-rebuild-check-ms` interval when the pipelines report data changes (segment counts or enrichment data changed since the last export) — see `TileBuildService.markDataChanged()`/`rebuildIfDataChanged()`. Only one build can run at a time; concurrent triggers return `409` for the manual endpoint, or are silently skipped and retried on the next scheduled check for the automatic one.
 
 ### Configuration
 
@@ -431,4 +554,6 @@ Tile builds are triggered manually via `POST /api/admin/tiles/rebuild`. Only one
 |---|---|---|
 | `tiles.directory` | `./data/tiles` | Output directory for the PMTiles file |
 | `tiles.tippecanoe-binary` | `tippecanoe` | Path to the Tippecanoe binary |
+| `tiles.tile-join-binary` | `tile-join` | Path to the tile-join binary |
 | `tiles.build-timeout-minutes` | `30` | Max time before the build is killed |
+| `tiles.auto-rebuild-check-ms` | `300000` | How often to check for pending data changes and auto-trigger a rebuild |

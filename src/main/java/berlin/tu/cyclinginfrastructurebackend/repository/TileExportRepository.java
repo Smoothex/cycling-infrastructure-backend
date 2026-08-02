@@ -60,35 +60,41 @@ public class TileExportRepository {
     }
 
     /**
-     * The balance mirrors the frontend's eventBalance(): the preference/avoidance
-     * count ratio scaled by a log10 magnitude factor, so the strongest buckets are
-     * reserved for segments with several net events of one type. The bucket CASE
-     * mirrors eventSignalBucket(). traffic_measured means an attached detector
-     * measurement (status ENRICHED), matching the segments API.
+     * The balance mirrors the frontend's eventBalance(): additive smoothing with
+     * BALANCE_PRIOR_STRENGTH phantom neutral events in the denominator, so the score
+     * grows with both the one-sidedness and the amount of evidence and approaches
+     * (but never reaches) +-1. Unanimous boundaries: 1-2 events LIGHT, 3-7 moderate,
+     * 8-44 STRONG, 45+ EXTREME. The bucket CASE mirrors eventSignalBucket().
+     * traffic_measured means an attached detector measurement (status ENRICHED),
+     * matching the segments API.
      */
+    private static final int BALANCE_PRIOR_STRENGTH = 5;
+
     private static String balanceExpression(String avoidance, String preference) {
         String total = "(" + avoidance + " + " + preference + ")";
         return """
                 CASE
                     WHEN %s > 0
-                        THEN ((%s - %s)::double precision / %s)
-                             * LEAST(1.0, log(10, (%s + 1)::numeric))::double precision
+                        THEN ((%s - %s)::double precision / (%s + %d))
                     ELSE 0
-                END""".formatted(total, preference, avoidance, total, total);
+                END""".formatted(total, preference, avoidance, total, BALANCE_PRIOR_STRENGTH);
     }
 
     private static String bucketCase(String eventCount, String balance) {
         return """
                 CASE
                     WHEN %s = 0 THEN 'NO_EVENTS'
+                    WHEN %s <= -0.9 THEN 'AVOIDANCE_EXTREME'
                     WHEN %s <= -0.6 THEN 'AVOIDANCE_STRONG'
                     WHEN %s <= -0.3 THEN 'AVOIDANCE'
                     WHEN %s <= -0.1 THEN 'AVOIDANCE_LIGHT'
+                    WHEN %s >= 0.9 THEN 'PREFERENCE_EXTREME'
                     WHEN %s >= 0.6 THEN 'PREFERENCE_STRONG'
                     WHEN %s >= 0.3 THEN 'PREFERENCE'
                     WHEN %s >= 0.1 THEN 'PREFERENCE_LIGHT'
                     ELSE 'BASELINE'
-                END""".formatted(eventCount, balance, balance, balance, balance, balance, balance);
+                END""".formatted(eventCount, balance, balance, balance, balance,
+                balance, balance, balance, balance);
     }
 
     private static long yearStartMillis(int year) {
@@ -150,7 +156,7 @@ public class TileExportRepository {
                            s.preference_count,
                            s.preference_ratio,
                            s.gradient_percent,
-                           (s.usage_count + s.avoidance_count + s.preference_count) AS obs,
+                           (s.usage_count + s.avoidance_count)                      AS obs,
                            (s.avoidance_count + s.preference_count)                 AS event_count,
                 """ + balanceExpression("s.avoidance_count", "s.preference_count") + """
                            AS balance,
@@ -162,7 +168,7 @@ public class TileExportRepository {
                     FROM street_segments s
                     LEFT JOIN enrichment e ON e.segment_id = s.id
                     WHERE s.geometry IS NOT NULL
-                      AND (s.usage_count + s.avoidance_count + s.preference_count) >= 1
+                      AND (s.usage_count + s.avoidance_count) >= 1
                 )
                 SELECT jsonb_build_object(
                     'type', 'Feature',

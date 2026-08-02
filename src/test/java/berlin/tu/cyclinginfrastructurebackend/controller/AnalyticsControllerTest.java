@@ -2,9 +2,11 @@ package berlin.tu.cyclinginfrastructurebackend.controller;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.service.ApiAnalyticsService;
+import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorGeometryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
 import org.junit.jupiter.api.Test;
@@ -27,8 +29,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AnalyticsControllerTest {
 
     private final ApiAnalyticsService analyticsService = mock(ApiAnalyticsService.class);
+    private final CorridorGeometryService corridorGeometryService = mock(CorridorGeometryService.class);
     private final MockMvc mockMvc = MockMvcBuilders
-            .standaloneSetup(new AnalyticsController(analyticsService))
+            .standaloneSetup(new AnalyticsController(analyticsService, corridorGeometryService))
             .build();
 
     @Test
@@ -61,17 +64,43 @@ class AnalyticsControllerTest {
         when(analyticsService.getCorridorRanking(any(), anyInt(), anyInt(), any(), any(), any()))
                 .thenReturn(List.of(new CorridorRankingDto(
                         "Chausseestraße", 134, 80, 1491, 600, 42, 68,
-                        13.38, 52.52, 13.39, 52.55, 123L)));
+                        13.38, 52.52, 13.39, 52.55, 123L, List.of(101L, 205L))));
 
         mockMvc.perform(get("/api/analytics/corridors"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].streetName").value("Chausseestraße"))
                 .andExpect(jsonPath("$[0].avoidanceRideCount").value(134))
-                .andExpect(jsonPath("$[0].scaryIncidentCount").value(68));
+                .andExpect(jsonPath("$[0].scaryIncidentCount").value(68))
+                .andExpect(jsonPath("$[0].segmentIds[0]").value(101));
 
         verify(analyticsService).getCorridorRanking(
                 eq(SegmentEventType.AVOIDANCE), eq(5), eq(8),
                 eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void corridorGeometryUsesTheSelectedStreetBounds() throws Exception {
+        when(corridorGeometryService.getCorridorGeometry(
+                eq("Schönhauser Allee"), eq(13.4), eq(52.52), eq(13.42), eq(52.54)))
+                .thenReturn(new CorridorGeometryDto(
+                        "Schönhauser Allee",
+                        List.of(101L, 102L),
+                        new CorridorGeometryDto.MultiLineStringGeometry(List.of(
+                                List.of(List.of(13.4, 52.52), List.of(13.42, 52.54))))));
+
+        mockMvc.perform(get("/api/analytics/corridor-geometry")
+                        .param("streetName", "Schönhauser Allee")
+                        .param("minLon", "13.4")
+                        .param("minLat", "52.52")
+                        .param("maxLon", "13.42")
+                        .param("maxLat", "52.54"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.streetName").value("Schönhauser Allee"))
+                .andExpect(jsonPath("$.segmentIds[1]").value(102))
+                .andExpect(jsonPath("$.geometry.type").value("MultiLineString"));
+
+        verify(corridorGeometryService).getCorridorGeometry(
+                eq("Schönhauser Allee"), eq(13.4), eq(52.52), eq(13.42), eq(52.54));
     }
 
     @Test

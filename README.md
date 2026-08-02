@@ -72,7 +72,8 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `pipeline.analysis.enabled` | `true` | Enable detour analysis scheduler |
 | `pipeline.enrichment.weather.enabled` | `true` | Enable Open-Meteo enrichment |
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
-| `pipeline.enrichment.ohsome.enabled` | `false` | Enable Ohsome OSM enrichment (rate-limited) |
+| `pipeline.enrichment.ohsome.enabled` | `true` | Enable Ohsome OSM enrichment (rate-limited) |
+| `pipeline.enrichment.berlin-open-data.enabled` | `true` | Enable VIZ Berlin road-closure enrichment |
 
 ## Data Directory Layout
 

@@ -34,8 +34,10 @@ Fetches hourly historical weather data for the location and timestamp of each ev
 
 | Property | Default |
 |---|---|
+| `pipeline.enrichment.weather.enabled` | `true` |
 | `pipeline.enrichment.weather.batch-size` | `100` |
 | `pipeline.enrichment.weather.delay-ms` | `60000` |
+| `pipeline.enrichment.weather.delay-between-calls-ms` | `150` |
 
 ---
 
@@ -69,6 +71,7 @@ The detector metadata (station locations, road names, directions) is downloaded 
 
 | Property | Default |
 |---|---|
+| `pipeline.enrichment.traffic.enabled` | `true` |
 | `pipeline.enrichment.traffic.batch-size` | `2500` |
 | `enrichment.traffic.match-radius-meters` | `75` |
 | `pipeline.enrichment.traffic.delay-ms` | `60000` |
@@ -85,12 +88,18 @@ Events near a closure are flagged with `ExternalFactorType.ROAD_CLOSURE`. This h
 
 Each successful download refreshes a local cache file; if the API is unreachable at startup, the cached copy from the previous run is used. If neither is available, road-closure enrichment is disabled for that run.
 
+The feed also has its own subtype mapping (`RoadClosureImportService.mapSubtype`) that assigns `ExternalFactorType.CONSTRUCTION`, `ROAD_CLOSURE`, `EVENT`, or `HAZARD`/`INCIDENT` per entry — see the `road_closures` entity in [data-model.md](data-model.md) and the factor-type table below.
+
+Property names here use `berlin-open-data` for historical reasons — they configure this VIZ closures feed specifically, not a generic "Berlin Open Data" source.
+
 | Property | Default |
 |---|---|
+| `pipeline.enrichment.berlin-open-data.enabled` | `true` |
 | `pipeline.enrichment.berlin-open-data.batch-size` | `2500` |
 | `enrichment.berlin-open-data.url` | `https://api.viz.berlin.de/daten/baustellen_sperrungen_viz.json` |
 | `enrichment.berlin-open-data.cache-file` | `./data/berlinOpenData/cache/baustellen_sperrungen_viz.json` |
 | `pipeline.enrichment.berlin-open-data.delay-ms` | `60000` |
+| `enrichment.road-closures.refresh-ms` | `86400000` (import/refresh cadence, separate from the enrichment batch scheduler above) |
 
 ---
 
@@ -102,21 +111,40 @@ Queries historical OpenStreetMap tag values at the precise timestamp of each eve
 
 **OSM attributes fetched per event:**
 
+Deprecated `cycleway=opposite*` values are normalized to their modern `oneway:bicycle`/`cycleway` equivalents before extraction.
+
 | Tag | Description |
 |---|---|
-| `surface` | Road surface material (asphalt, cobblestone, etc.) |
+| `surface` | Road surface material (asphalt, cobblestone, etc.) — stored as-is on the segment |
 | `smoothness` | Surface quality (excellent → very_horrible) |
-| `cycleway` | Cycleway type (lane, track, shared, etc.) |
-| `cycleway:left` / `cycleway:right` | Side-specific cycleway presence |
-| `cycleway:width` | Width in meters |
-| `lit` | Street lighting (yes/no) |
 | `highway` | Road classification (primary, residential, etc.) |
-| `maxspeed` | Posted speed limit |
+| `lit` | Street lighting (yes/no) |
+| `cycleway:both` / `cycleway:right` / `cycleway:left` / `cycleway` | Cycleway presence, checked in that priority order; the winning tag's value is mapped to `cyclewayType` and its side to `cyclewayLocation` |
+| `cycleway(:*):surface` | Cycleway-specific surface for the matched side; falls back to the road `surface` tag if absent |
+| `cycleway(:*):width` | Cycleway width in meters for the matched side |
+| `oneway:bicycle` | Whether cyclists must follow the road's one-way direction |
+
+Note: `maxspeed` is **not** fetched or stored despite earlier versions of this doc — there is no corresponding field on `SegmentEvent`.
 
 **Rate limiting:** 500 ms between API calls.
 
 | Property | Default |
 |---|---|
+| `pipeline.enrichment.ohsome.enabled` | `true` |
 | `pipeline.enrichment.ohsome.batch-size` | `250` |
 | `pipeline.enrichment.ohsome.delay-between-calls-ms` | `500` |
 | `pipeline.enrichment.ohsome.delay-ms` | `60000` |
+
+---
+
+## `SegmentExternalFactor.factorType` by producer
+
+`segment_external_factors` (see [data-model.md](data-model.md)) has one `factorType` enum shared across sources; only two of the four enrichment jobs above actually write `SegmentExternalFactor` rows:
+
+| `factorType` | Written by |
+|---|---|
+| `WEATHER` | Weather (Open-Meteo) — always this value |
+| `CONSTRUCTION`, `ROAD_CLOSURE`, `EVENT`, `HAZARD`, `INCIDENT` | VIZ Road Closures, via the feed's `subtype` → `factorType` mapping on `RoadClosure` (see the `road_closures` entity in [data-model.md](data-model.md)) |
+| `TRAFFIC` | Not currently written by any source. Traffic measurements are stored directly on the `segment_events` traffic fields (see [data-model.md](data-model.md)), not as a `SegmentExternalFactor` — this enum value is reserved but unused today. |
+
+The Ohsome (OSM Attributes) enrichment does not write `SegmentExternalFactor` rows at all; it writes directly onto `segment_events`' OSM infrastructure fields.

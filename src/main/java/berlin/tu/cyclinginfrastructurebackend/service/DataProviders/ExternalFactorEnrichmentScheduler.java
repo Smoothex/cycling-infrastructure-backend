@@ -105,7 +105,7 @@ public class ExternalFactorEnrichmentScheduler {
         if (!isEnabled(weatherEnabled)) return;
 
         runClaimedBatch(
-                "Weather",
+                "Weather (Open Meteo API)",
                 () -> workClaimService.claimWeatherEvents(weatherBatchSize),
                 event -> {
                     weatherDataProvider.enrichEvent(event);
@@ -131,7 +131,7 @@ public class ExternalFactorEnrichmentScheduler {
         if (!isEnabled(berlinOpenDataEnabled)) return;
 
         runClaimedBatch(
-                "Berlin Open Data",
+                "VIZ Berlin - Road disruption",
                 () -> workClaimService.claimBerlinOpenDataEvents(berlinOpenDataBatchSize),
                 event -> {
                     StreetSegment segment = event.getSegment();
@@ -149,7 +149,7 @@ public class ExternalFactorEnrichmentScheduler {
         if (!isEnabled(ohsomeEnabled)) return;
 
         runClaimedBatch(
-                "Ohsome API",
+                "OSM Infrastructure (ohsome API)",
                 () -> workClaimService.claimOhsomeEvents(ohsomeBatchSize),
                 event -> {
                     ohsomeApiDataProvider.enrichEvent(event);
@@ -177,7 +177,7 @@ public class ExternalFactorEnrichmentScheduler {
         if (!isEnabled(trafficEnabled)) return;
 
         runClaimedBatch(
-                "Traffic",
+                "VIZ Berlin - Traffic",
                 () -> workClaimService.claimTrafficEvents(trafficBatchSize),
                 event -> {
                     trafficDataProvider.enrichEvent(event);

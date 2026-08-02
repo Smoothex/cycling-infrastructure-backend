@@ -5,9 +5,11 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEnrichmentFilt
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.service.ApiAnalyticsService;
+import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorGeometryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.PipelineStatusDto;
@@ -24,9 +26,12 @@ import java.util.List;
 public class AnalyticsController {
 
     private final ApiAnalyticsService analyticsService;
+    private final CorridorGeometryService corridorGeometryService;
 
-    public AnalyticsController(ApiAnalyticsService analyticsService) {
+    public AnalyticsController(ApiAnalyticsService analyticsService,
+                               CorridorGeometryService corridorGeometryService) {
         this.analyticsService = analyticsService;
+        this.corridorGeometryService = corridorGeometryService;
     }
 
     @GetMapping("/summary")
@@ -73,6 +78,17 @@ public class AnalyticsController {
             @RequestParam(required = false) RideIntent rideIntent) {
 
         return analyticsService.getCorridorRanking(rank, minRideCount, limit, from, to, rideIntent);
+    }
+
+    @GetMapping("/corridor-geometry")
+    public CorridorGeometryDto getCorridorGeometry(
+            @RequestParam String streetName,
+            @RequestParam double minLon,
+            @RequestParam double minLat,
+            @RequestParam double maxLon,
+            @RequestParam double maxLat) {
+
+        return corridorGeometryService.getCorridorGeometry(streetName, minLon, minLat, maxLon, maxLat);
     }
 
     @GetMapping("/infrastructure-signals")

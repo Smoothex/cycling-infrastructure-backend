@@ -18,6 +18,7 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -34,19 +35,33 @@ public class MapMatchingService {
     private final GraphHopperService hopperService;
     private final StreetSegmentService segmentService;
     private final RideRepository rideRepository;
+    private final double minimumOriginDestinationDistanceMeters;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public MapMatchingService(GraphHopperService hopperService,
                               StreetSegmentService segmentService,
-                              RideRepository rideRepository) {
+                              RideRepository rideRepository,
+                              @Value("${analysis.minimum-origin-destination-distance-meters:500}")
+                              double minimumOriginDestinationDistanceMeters) {
         this.hopperService = hopperService;
         this.segmentService = segmentService;
         this.rideRepository = rideRepository;
+        this.minimumOriginDestinationDistanceMeters = minimumOriginDestinationDistanceMeters;
     }
 
     public boolean processRide(Ride ride) {
         List<RidePoint> validPoints = filterAndSortPoints(ride);
         if (validPoints.size() < 2) return false;
+
+        double originDestinationDistanceMeters = calculateOriginDestinationDistanceMeters(validPoints);
+        if (originDestinationDistanceMeters < minimumOriginDestinationDistanceMeters) {
+            log.debug(
+                    "Skipping ride {}: origin-destination distance {} m is below the minimum of {} m",
+                    ride.getId(), originDestinationDistanceMeters, minimumOriginDestinationDistanceMeters);
+            ride.setStatus(Status.SKIPPED);
+            rideRepository.save(ride);
+            return true;
+        }
 
         try {
             List<Observation> observations = validPoints.stream()
@@ -107,6 +122,14 @@ public class MapMatchingService {
     private boolean isValidCoordinate(double lat, double lon) {
         return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
                 && lat != 0.0 && lon != 0.0;
+    }
+
+    private double calculateOriginDestinationDistanceMeters(List<RidePoint> sortedPoints) {
+        RidePoint origin = sortedPoints.getFirst();
+        RidePoint destination = sortedPoints.getLast();
+        return DistanceCalcEarth.DIST_EARTH.calcDist(
+                origin.getLocation().getY(), origin.getLocation().getX(),
+                destination.getLocation().getY(), destination.getLocation().getX());
     }
 
     /**

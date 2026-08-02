@@ -4,6 +4,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus;
@@ -184,6 +185,8 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
               AND (:trafficEnriched = false OR se.trafficEnriched = true)
               AND (:trafficMeasured = false
                    OR se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED)
+              AND (:rideIntent IS NULL OR se.rideIntent = :rideIntent)
+              AND (:trafficCondition IS NULL OR se.trafficCondition = :trafficCondition)
             ORDER BY se.eventTimestamp DESC
             """)
     List<SegmentEvent> findSegmentEventsForApi(
@@ -195,6 +198,8 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            RideIntent rideIntent,
+            TrafficCondition trafficCondition,
             Pageable pageable
     );
 

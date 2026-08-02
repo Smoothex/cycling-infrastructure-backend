@@ -118,6 +118,10 @@ public class StreetSegmentService {
         List<Integer> sortedEdgeIds = new ArrayList<>(allEdgeIds);
         Collections.sort(sortedEdgeIds);
 
+        // lock every segment this transaction will touch in one ascending pass first incrementAvoidanceAll/incrementPreferenceAll each lock their segments, but
+        // running them in parallel resets the order between the two calls, which let concurrent rides deadlock when one ride's avoided segment is another ride's chosen segment
+        repository.lockForUpdate(sortedEdgeIds.stream().map(Integer::longValue).toList());
+
         if (hasAvoidedEdges) {
             repository.incrementAvoidanceAll(
                     avoidedEdgeBearings.keySet().stream().map(Integer::longValue).toList());

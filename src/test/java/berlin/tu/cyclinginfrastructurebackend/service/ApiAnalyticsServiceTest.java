@@ -61,7 +61,7 @@ class ApiAnalyticsServiceTest {
                 anyString(), anyInt(), anyInt(), anyLong(), anyLong(), anyString()))
                 .thenReturn(List.<Object[]>of(new Object[]{
                         "Chausseestraße", 134L, 80L, 1491L, 600L, 42L,
-                        13.38, 52.52, 13.39, 52.55, 123L, 68L
+                        13.38, 52.52, 13.39, 52.55, 123L, 68L, "101,205,309"
                 }));
 
         List<CorridorRankingDto> result = service.getCorridorRanking(
@@ -72,6 +72,7 @@ class ApiAnalyticsServiceTest {
             assertThat(corridor.avoidanceRideCount()).isEqualTo(134);
             assertThat(corridor.scaryIncidentCount()).isEqualTo(68);
             assertThat(corridor.topSegmentId()).isEqualTo(123L);
+            assertThat(corridor.segmentIds()).containsExactly(101L, 205L, 309L);
         });
     }
 
