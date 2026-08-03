@@ -35,8 +35,6 @@ out/
 ### VS Code ###
 .vscode/
 
-data/*-cache
-data/*.pdf
-
 .DS_Store
 .env
+/data/

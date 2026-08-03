@@ -43,6 +43,8 @@ The SimRa ride files are mounted from `/Users/momchil.petrov/Downloads/SimRa` - 
 
 The app starts on `http://localhost:8080`. On first boot, the OSM extract is downloaded automatically (see below), then GraphHopper builds its routing graph from it - this takes several minutes and produces a cache at `./data/graphhopper-cache`. As part of this, GraphHopper also prepares a Contraction Hierarchy (CH) for the `bike_shortest` profile, which takes roughly 15-20 minutes on the full Germany extract. Both the graph and the CH files are cached to disk, so this cost is paid once - subsequent restarts just load the existing cache (look for `There are no CHs to prepare` in the logs).
 
+GraphHopper caches the profile definitions and encoded access values as part of the routing graph. After changing or upgrading the profiles, delete `./data/graphhopper-cache` before starting the application so GraphHopper imports the OSM data with the current definitions. This profile update requires a rebuild even if the previous cache also contained a profile named `bike_shortest`. The current profiles are documented in [detour-analysis.md](docs/detour-analysis.md#2-shortest-path-computation).
+
 ### OSM data
 
 On startup, the backend checks for the OSM extract at `graphhopper.osm.file` and, if missing, downloads it from 
@@ -119,6 +121,6 @@ Deep-dive documentation follows the pipeline order:
 
 - [docs/data-model.md](docs/data-model.md) - entity relationship diagram and field-level reference
 - [docs/data-import.md](docs/data-import.md) - SimRa file format, parsing, validation, map matching
-- [docs/detour-analysis.md](docs/detour-analysis.md) - shortest path comparison, avoidance/preference event creation, ride intent classification
+- [docs/detour-analysis.md](docs/detour-analysis.md) - routing profiles, shortest-path comparison, avoidance/preference event creation, ride intent classification
 - [docs/external-enrichments.md](docs/external-enrichments.md) - weather, traffic, OSM, and road closure enrichment sources
 - [docs/data-export.md](docs/data-export.md) - REST API reference, vector tiles, PMTiles, Tippecanoe

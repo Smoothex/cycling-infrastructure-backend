@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cycling-infrastructure-backend-test">
+    <bounds minlat="51.999" minlon="12.999" maxlat="52.032" maxlon="13.003"/>
+
+    <node id="1" lat="52.0000" lon="13.0000" version="1"/>
+    <node id="2" lat="52.0000" lon="13.0020" version="1"/>
+    <node id="3" lat="52.0010" lon="13.0010" version="1"/>
+    <node id="11" lat="52.0100" lon="13.0000" version="1"/>
+    <node id="12" lat="52.0100" lon="13.0020" version="1"/>
+    <node id="13" lat="52.0110" lon="13.0010" version="1"/>
+    <node id="21" lat="52.0200" lon="13.0000" version="1"/>
+    <node id="22" lat="52.0200" lon="13.0020" version="1"/>
+    <node id="23" lat="52.0210" lon="13.0010" version="1"/>
+    <node id="31" lat="52.0300" lon="13.0000" version="1"/>
+    <node id="32" lat="52.0300" lon="13.0020" version="1"/>
+    <node id="33" lat="52.0310" lon="13.0010" version="1"/>
+
+    <!-- A bicycle=no shortcut and a longer, legal route. -->
+    <way id="101" version="1">
+        <nd ref="1"/>
+        <nd ref="2"/>
+        <tag k="highway" v="residential"/>
+        <tag k="bicycle" v="no"/>
+    </way>
+    <way id="102" version="1">
+        <nd ref="1"/>
+        <nd ref="3"/>
+        <nd ref="2"/>
+        <tag k="highway" v="residential"/>
+    </way>
+
+    <!-- A short ordinary road and a longer cycleway. -->
+    <way id="111" version="1">
+        <nd ref="11"/>
+        <nd ref="12"/>
+        <tag k="highway" v="residential"/>
+    </way>
+    <way id="112" version="1">
+        <nd ref="11"/>
+        <nd ref="13"/>
+        <nd ref="12"/>
+        <tag k="highway" v="cycleway"/>
+    </way>
+
+    <!-- An access=private shortcut and a longer, public route. -->
+    <way id="121" version="1">
+        <nd ref="21"/>
+        <nd ref="22"/>
+        <tag k="highway" v="residential"/>
+        <tag k="access" v="private"/>
+    </way>
+    <way id="122" version="1">
+        <nd ref="21"/>
+        <nd ref="23"/>
+        <nd ref="22"/>
+        <tag k="highway" v="residential"/>
+    </way>
+
+    <!-- A direct one-way road and a legal reverse-direction detour. -->
+    <way id="131" version="1">
+        <nd ref="31"/>
+        <nd ref="32"/>
+        <tag k="highway" v="residential"/>
+        <tag k="oneway" v="yes"/>
+    </way>
+    <way id="132" version="1">
+        <nd ref="32"/>
+        <nd ref="33"/>
+        <nd ref="31"/>
+        <tag k="highway" v="residential"/>
+    </way>
+</osm>
