@@ -71,7 +71,7 @@ Before map matching, two checks run:
 
 ### Step 4 — Map Matching
 
-`MapMatchingService` snaps the raw GPS trajectory to the OSM road network using GraphHopper's Hidden Markov Model map matching algorithm:
+`MapMatchingService` snaps the raw GPS trajectory to the OSM road network using GraphHopper's Hidden Markov Model map matching algorithm. The `bike_match_neutral` profile respects directional bicycle access and excludes inaccessible and private edges. It uses a constant speed of 20 km/h and does not prefer cycleways or any other infrastructure class, so infrastructure assumptions do not bias reconstruction of the observed route. The complete profile definition is documented in [detour-analysis.md](detour-analysis.md#2-shortest-path-computation).
 
 1. GPS points are converted to `Observation` objects and passed to GraphHopper
 2. GraphHopper returns a sequence of `EdgeMatch` objects — one per road segment traversed

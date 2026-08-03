@@ -273,7 +273,7 @@ public class DetourAnalysisService {
         int overlappingEdgesCount = shortestEdges.size() - avoidedEdges.size();
         double overlapRatio = (double) overlappingEdgesCount / shortestEdges.size();
 
-        log.debug("Route overlap ratio: {} ({} overlapping / {} total shortest edges)",
+        log.debug("Route overlap ratio: {} ({} overlapping / {} total shortest path edges)",
                 String.format("%.2f", overlapRatio), overlappingEdgesCount, shortestEdges.size());
 
         return overlapRatio < minOverlapRatio;

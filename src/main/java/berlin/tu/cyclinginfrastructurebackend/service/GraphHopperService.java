@@ -34,6 +34,18 @@ import java.util.List;
 @Service
 public class GraphHopperService {
     private static final Logger log = LoggerFactory.getLogger(GraphHopperService.class);
+    static final String PROFILE_BIKE_MATCH_NEUTRAL = "bike_match_neutral";
+    static final String PROFILE_BIKE_SHORTEST = "bike_shortest";
+    static final double PROFILE_SPEED_KMH = 20.0;
+    static final double PROFILE_DISTANCE_INFLUENCE_SECONDS_PER_KM = 0.0;
+    static final String ENCODED_VALUES = String.join(",",
+            "bike_access|block_private=true",
+            "roundabout",
+            "road_class",
+            "road_access",
+            "max_speed",
+            "road_environment",
+            "surface");
 
     @Value("${graphhopper.osm.file}")
     private String osmFile;
@@ -50,8 +62,6 @@ public class GraphHopperService {
     @Getter
     private GraphHopper hopper;
     private final ThreadLocal<MapMatching> mapMatchingThreadLocal = new ThreadLocal<>();
-    private static final String PROFILE_BIKE_CUSTOM = "bike_custom";
-    private static final String PROFILE_BIKE_SHORTEST = "bike_shortest";
 
     @PostConstruct
     public void init() {
@@ -63,19 +73,14 @@ public class GraphHopperService {
         hopper.setElevation(true);
         hopper.setElevationProvider(new SRTMProvider(elevationCacheDir));
 
-        hopper.setEncodedValuesString("road_class,road_access,max_speed,road_environment,surface");
+        hopper.setEncodedValuesString(ENCODED_VALUES);
 
-        CustomModel customModel = new CustomModel();
-        customModel.addToSpeed(Statement.If("true", Statement.Op.LIMIT, "20"));
-        customModel.addToPriority(Statement.If("road_class == CYCLEWAY", Statement.Op.MULTIPLY, "1.5"));
-        Profile bikeCustomProfile = new Profile(PROFILE_BIKE_CUSTOM).setCustomModel(customModel);
+        Profile bikeMatchProfile = new Profile(PROFILE_BIKE_MATCH_NEUTRAL)
+                .setCustomModel(createNeutralBicycleModel());
+        Profile bikeShortestProfile = new Profile(PROFILE_BIKE_SHORTEST)
+                .setCustomModel(createNeutralBicycleModel());
 
-        CustomModel shortestModel = new CustomModel();
-        shortestModel.addToSpeed(Statement.If("true", Statement.Op.LIMIT, "20"));
-        shortestModel.setDistanceInfluence(100.0);  // prioritize shortest path
-        Profile bikeShortestProfile = new Profile(PROFILE_BIKE_SHORTEST).setCustomModel(shortestModel);
-
-        hopper.setProfiles(bikeCustomProfile, bikeShortestProfile);
+        hopper.setProfiles(bikeMatchProfile, bikeShortestProfile);
 
         // set contraction hierarchy
         hopper.getCHPreparationHandler().setCHProfiles(new CHProfile(PROFILE_BIKE_SHORTEST));
@@ -133,7 +138,9 @@ public class GraphHopperService {
     public MatchResult match(List<Observation> observations) {
         MapMatching mm = mapMatchingThreadLocal.get();
         if (mm == null) {
-            mm = MapMatching.fromGraphHopper(hopper, new PMap().putObject("profile", PROFILE_BIKE_CUSTOM));
+            mm = MapMatching.fromGraphHopper(
+                    hopper,
+                    new PMap().putObject("profile", PROFILE_BIKE_MATCH_NEUTRAL));
             mapMatchingThreadLocal.set(mm);
         }
         return mm.match(observations);
@@ -150,6 +157,25 @@ public class GraphHopperService {
             return null;
         }
         return rsp.getBest();
+    }
+
+    /**
+     * Creates a bicycle-access-aware model whose finite edge weights are strictly proportional
+     * to physical distance. Infrastructure attributes are deliberately excluded so neither map
+     * matching nor shortest-path routing assumes the preferences measured by the analysis.
+     */
+    static CustomModel createNeutralBicycleModel() {
+        CustomModel model = new CustomModel();
+        model.addToSpeed(Statement.If(
+                "true",
+                Statement.Op.LIMIT,
+                Double.toString(PROFILE_SPEED_KMH)));
+        model.addToPriority(Statement.If(
+                "!bike_access",
+                Statement.Op.MULTIPLY,
+                "0"));
+        model.setDistanceInfluence(PROFILE_DISTANCE_INFLUENCE_SECONDS_PER_KM);
+        return model;
     }
 
     /** Computes average gradient (%) for an edge. Positive = uphill, negative = downhill. */

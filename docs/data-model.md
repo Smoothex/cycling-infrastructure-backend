@@ -27,7 +27,7 @@ The central entity. One record per imported SimRa ride file.
 | `actualDistance` | double | Distance of the map-matched trajectory in meters |
 | `shortestPathDistance` | double | Distance of the shortest path in meters |
 | `isDetour` | boolean | True if actual > shortest × 1.10 |
-| `overlapRatio` | double | Fraction of shortest path edges also present in actual route |
+| `overlapRatio` | double | Fraction of shortest-path edges also present in actual route |
 | `originalFilename` | string | Source CSV filename |
 
 **Ride status lifecycle:**
@@ -91,8 +91,8 @@ One record per GraphHopper road network edge. The `id` is the GraphHopper edge I
 | `streetName` | string | OSM name tag at time of graph build |
 | `geometry` | LineString (4326) | Edge geometry |
 | `usageCount` | int | Times a ride traversed this segment |
-| `avoidanceCount` | int | Times a ride avoided this segment (it was on shortest path but bypassed) |
-| `preferenceCount` | int | Times a ride chose this segment (it was NOT on shortest path) |
+| `avoidanceCount` | int | Times a ride avoided this segment (it was on the shortest path but bypassed) |
+| `preferenceCount` | int | Times a ride chose this segment (it was not on the shortest path) |
 | `avoidanceRatio` | double | `avoidanceCount / (avoidanceCount + usageCount)` |
 | `preferenceRatio` | double | `preferenceCount / usageCount`; preferred traversals are a subset of usage |
 | `gradientPercent` | double | Elevation gradient derived from DEM data |
@@ -221,6 +221,6 @@ These are `@ElementCollection` tables that store multi-valued fields of `rides`.
 | `ride_edge_bearings` | `ride_id`, `edge_id` | `bearing_degrees` (double) | Compass bearing per traversed edge (from map matching) |
 | `ride_edge_timestamps` | `ride_id`, `edge_id` | `timestamp` (epoch ms) | Timestamp when the rider was on each traversed edge |
 
-The bearing and timestamp maps drive event creation during detour analysis: avoided-edge bearings come from the shortest path geometry, chosen-edge bearings come from `ride_edge_bearings`.
+The bearing and timestamp maps drive event creation during detour analysis: avoided-edge bearings come from the shortest-path geometry, chosen-edge bearings come from `ride_edge_bearings`.
 
 `ride_edges.ride_id` is indexed for the same reason as `ride_points.ride_id` above. `ride_edge_bearings` and `ride_edge_timestamps` don't need a separate index - their composite primary key `(ride_id, edge_id)` already supports fast lookups by `ride_id` alone.
