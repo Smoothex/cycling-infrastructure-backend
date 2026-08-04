@@ -88,6 +88,18 @@ Events near a closure are flagged with `ExternalFactorType.ROAD_CLOSURE`. This h
 
 Each successful download refreshes a local cache file; if the API is unreachable at startup, the cached copy from the previous run is used. If neither is available, road-closure enrichment is disabled for that run.
 
+Private historical VIZ snapshots can be placed below
+`./data/berlinOpenData/historical/2024/` and
+`./data/berlinOpenData/historical/2025/`. They remain local because the complete
+`data/` directory is Git-ignored. At startup the importer reads the legacy
+ISO-8859-1 GeoJSON files, collapses repeated daily revisions by source id and
+validity start, and inserts the normalized occurrences before importing the live
+feed. A later `Beendet` revision closes the preceding occurrence at its `tstore`
+timestamp; it does not remove the historical closure.
+
+The available snapshots cover 2024-01-01 through 2025-07-03. There is no snapshot
+for 2024-09-17.
+
 The feed also has its own subtype mapping (`RoadClosureImportService.mapSubtype`) that assigns `ExternalFactorType.CONSTRUCTION`, `ROAD_CLOSURE`, `EVENT`, or `HAZARD`/`INCIDENT` per entry — see the `road_closures` entity in [data-model.md](data-model.md) and the factor-type table below.
 
 Property names here use `berlin-open-data` for historical reasons — they configure this VIZ closures feed specifically, not a generic "Berlin Open Data" source.

@@ -17,6 +17,7 @@ import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -24,14 +25,18 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
 
 /**
- * Imports the VIZ (Verkehrsinformationszentrale Berlin) Baustellen/Sperrungen feed
- * into the {@code road_closures} table. The feed is a live snapshot of current and
- * planned entries, so imports upsert by feed id and never delete: rows that drop out
- * of later feed versions remain as history. The download is cached on disk so
- * restarts can fall back to the last successful copy when the API is unreachable.
+ * Imports private historical VIZ snapshots and the live VIZ
+ * (Verkehrsinformationszentrale Berlin) Baustellen/Sperrungen feed into the
+ * {@code road_closures} table. Historical occurrences are normalized and inserted
+ * once into a database. Live imports upsert by feed id and never
+ * delete. The live download is cached so restarts can use the last successful copy.
  */
 @Service
 public class RoadClosureImportService {
@@ -41,9 +46,11 @@ public class RoadClosureImportService {
             "https://api.viz.berlin.de/daten/baustellen_sperrungen_viz.json";
     private static final ZoneId BERLIN_ZONE = ZoneId.of("Europe/Berlin");
     static final DateTimeFormatter BERLIN_DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+    private static final String HISTORICAL_DIRECTORY_NAME = "historical";
 
     private final RoadClosureRepository roadClosureRepository;
     private final RestClient restClient;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final String dataUrl;
     private final Path cacheFile;
     private boolean importAttempted = false;
@@ -65,9 +72,161 @@ public class RoadClosureImportService {
     public synchronized boolean ensureImported() {
         if (!importAttempted) {
             importAttempted = true;
+            importHistoricalSnapshots(historicalDirectory());
             refresh();
         }
         return roadClosureRepository.count() > 0;
+    }
+
+    /**
+     * Loads the private daily VIZ snapshots once into a clean database. Snapshot
+     * rows are reduced to one revision per source id and validity start before
+     * they are inserted, so this path deliberately performs no historical
+     * upserts or legacy-row migration.
+     */
+    private void importHistoricalSnapshots(Path historicalDirectory) {
+        List<RoadClosure> closures = loadHistoricalClosures(historicalDirectory, System.currentTimeMillis());
+        if (closures.isEmpty()) {
+            return;
+        }
+
+        roadClosureRepository.saveAll(closures);
+        log.info("Imported {} normalized historical VIZ road closures from '{}'.",
+                closures.size(), historicalDirectory);
+    }
+
+    /**
+     * Reads legacy ISO-8859-1 GeoJSON snapshots and returns insert-ready rows.
+     * Package-private for focused parser tests; production callers use the
+     * conventional directory next to the live-feed cache.
+     */
+    List<RoadClosure> loadHistoricalClosures(Path historicalDirectory, long importedAt) {
+        if (!Files.isDirectory(historicalDirectory)) {
+            log.info("No historical VIZ road-closure directory found at '{}'.", historicalDirectory);
+            return List.of();
+        }
+
+        List<Path> snapshotFiles;
+        try (Stream<Path> paths = Files.walk(historicalDirectory, FileVisitOption.FOLLOW_LINKS)) {
+            snapshotFiles = paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().startsWith("incidents_viz_"))
+                    .filter(path -> path.getFileName().toString().endsWith(".json"))
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            log.warn("Failed to scan historical VIZ road-closure directory '{}': {}",
+                    historicalDirectory, e.getMessage());
+            return List.of();
+        }
+
+        Map<HistoricalOccurrenceKey, HistoricalOccurrence> occurrences = new LinkedHashMap<>();
+        int invalidFiles = 0;
+        int skippedFeatures = 0;
+        long revisionOrder = 0;
+
+        for (Path snapshotFile : snapshotFiles) {
+            try {
+                String json = Files.readString(snapshotFile, StandardCharsets.ISO_8859_1);
+                JsonNode features = objectMapper.readTree(json).get("features");
+                if (features == null || !features.isArray()) {
+                    invalidFiles++;
+                    log.warn("No 'features' array in historical VIZ snapshot '{}'.", snapshotFile);
+                    continue;
+                }
+
+                for (JsonNode feature : features) {
+                    revisionOrder++;
+                    JsonNode props = feature.get("properties");
+                    JsonNode validity = props == null ? null : props.get("validity");
+                    String sourceId = props == null ? null : textOrNull(props, "id");
+                    Long validFrom = validity == null ? null
+                            : parseBerlinDateTime(textOrNull(validity, "from"));
+                    if (sourceId == null || sourceId.isBlank() || validFrom == null) {
+                        skippedFeatures++;
+                        continue;
+                    }
+
+                    HistoricalOccurrenceKey key = new HistoricalOccurrenceKey(sourceId, validFrom);
+                    HistoricalRevision revision = new HistoricalRevision(
+                            feature.deepCopy(),
+                            parseInstant(textOrNull(props, "tstore")),
+                            revisionOrder
+                    );
+                    occurrences.computeIfAbsent(key, ignored -> new HistoricalOccurrence())
+                            .accept(revision, "Beendet".equals(textOrNull(props, "subtype")));
+                }
+            } catch (Exception e) {
+                invalidFiles++;
+                log.warn("Failed to parse historical VIZ snapshot '{}': {}", snapshotFile, e.getMessage());
+            }
+        }
+
+        GeoJsonReader geoJsonReader = new GeoJsonReader();
+        List<RoadClosure> closures = new ArrayList<>(occurrences.size());
+        int endedWithoutActiveRevision = 0;
+
+        for (Map.Entry<HistoricalOccurrenceKey, HistoricalOccurrence> entry : occurrences.entrySet()) {
+            HistoricalOccurrence occurrence = entry.getValue();
+            if (occurrence.latestActive == null) {
+                endedWithoutActiveRevision++;
+                continue;
+            }
+
+            try {
+                RoadClosure closure = parseFeature(occurrence.latestActive.feature(), geoJsonReader, importedAt);
+                if (closure == null) {
+                    skippedFeatures++;
+                    log.warn("Skipping incomplete historical VIZ occurrence '{}'.", entry.getKey());
+                    continue;
+                }
+
+                closure.setFeedId(historicalFeedId(entry.getKey()));
+                if (occurrence.latestEnded != null
+                        && isLater(occurrence.latestEnded, occurrence.latestActive)
+                        && occurrence.latestEnded.tstore() != null
+                        && occurrence.latestEnded.tstore() >= closure.getValidFrom()) {
+                    closure.setValidTo(occurrence.latestEnded.tstore());
+                }
+                closures.add(closure);
+            } catch (Exception e) {
+                skippedFeatures++;
+                log.warn("Skipping normalized historical VIZ occurrence '{}': {}",
+                        entry.getKey(), e.getMessage());
+            }
+        }
+
+        log.info("Historical VIZ normalization: {} files, {} occurrences, {} invalid files, "
+                        + "{} skipped features, {} ended records without an active revision.",
+                snapshotFiles.size(), closures.size(), invalidFiles, skippedFeatures, endedWithoutActiveRevision);
+        return closures;
+    }
+
+    private Path historicalDirectory() {
+        Path cacheDirectory = cacheFile.getParent();
+        Path berlinOpenDataDirectory = cacheDirectory == null ? null : cacheDirectory.getParent();
+        if (berlinOpenDataDirectory == null) {
+            return Path.of("./data/berlinOpenData", HISTORICAL_DIRECTORY_NAME);
+        }
+        return berlinOpenDataDirectory.resolve(HISTORICAL_DIRECTORY_NAME);
+    }
+
+    private static String historicalFeedId(HistoricalOccurrenceKey key) {
+        return "historical:" + key.sourceId() + ":" + key.validFrom();
+    }
+
+    private static boolean isLater(HistoricalRevision candidate, HistoricalRevision current) {
+        if (candidate.tstore() != null && current.tstore() != null) {
+            int timestampComparison = candidate.tstore().compareTo(current.tstore());
+            if (timestampComparison != 0) {
+                return timestampComparison > 0;
+            }
+        } else if (candidate.tstore() != null) {
+            return true;
+        } else if (current.tstore() != null) {
+            return false;
+        }
+        return candidate.order() > current.order();
     }
 
     @Scheduled(
@@ -81,7 +240,7 @@ public class RoadClosureImportService {
         }
 
         try {
-            JsonNode features = new ObjectMapper().readTree(json).get("features");
+            JsonNode features = objectMapper.readTree(json).get("features");
             if (features == null || !features.isArray()) {
                 log.warn("No 'features' array in VIZ road-closure GeoJSON from '{}'.", dataUrl);
                 return;
@@ -259,5 +418,26 @@ public class RoadClosureImportService {
     private static String textOrNull(JsonNode node, String field) {
         JsonNode child = node.get(field);
         return (child != null && !child.isNull()) ? child.asText() : null;
+    }
+
+    private record HistoricalOccurrenceKey(String sourceId, Long validFrom) {
+    }
+
+    private record HistoricalRevision(JsonNode feature, Long tstore, long order) {
+    }
+
+    private static final class HistoricalOccurrence {
+        private HistoricalRevision latestActive;
+        private HistoricalRevision latestEnded;
+
+        private void accept(HistoricalRevision revision, boolean ended) {
+            if (ended) {
+                if (latestEnded == null || isLater(revision, latestEnded)) {
+                    latestEnded = revision;
+                }
+            } else if (latestActive == null || isLater(revision, latestActive)) {
+                latestActive = revision;
+            }
+        }
     }
 }

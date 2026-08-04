@@ -81,13 +81,14 @@ All properties live in `src/main/resources/application.properties` and can be ov
 
 ```
 data/
-├── osm/                      # OSM PBF source files (auto-downloaded)
-├── graphhopper-cache/        # Built routing graph (auto-generated)
-├── elevation-cache/          # Elevation tiles (auto-downloaded)
-├── tiles/                    # Generated PMTiles vector tiles
-├── berlinTraffic/cache/      # Monthly traffic measurement archives (auto-downloaded)
-├── berlinOpenData/cache/     # VIZ road closures / construction JSON (auto-downloaded)
-└── SimRa/                    # SimRa ride CSV files (or mounted volume)
+├── osm/                       # OSM PBF source files (auto-downloaded)
+├── graphhopper-cache/         # Built routing graph (auto-generated)
+├── elevation-cache/           # Elevation tiles (auto-downloaded)
+├── tiles/                     # Generated PMTiles vector tiles
+├── berlinTraffic/cache/       # Monthly traffic measurement archives (auto-downloaded)
+├── berlinOpenData/cache/      # VIZ road closures / construction JSON (auto-downloaded)
+├── berlinOpenData/historical/ # Private historical VIZ snapshots, grouped by year
+└── SimRa/                     # SimRa ride CSV files (or mounted volume)
 ```
 
 ## Data Pipeline Overview

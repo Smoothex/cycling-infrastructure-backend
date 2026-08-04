@@ -11,9 +11,9 @@ import org.locationtech.jts.geom.Geometry;
 import java.util.UUID;
 
 /**
- * One entry of the VIZ Berlin Baustellen/Sperrungen feed. The feed is a live
- * snapshot, so this table accumulates history: imports upsert by {@link #feedId}
- * and rows that disappear from later feed versions are kept.
+ * One normalized occurrence from the historical or live VIZ Berlin
+ * Baustellen/Sperrungen data. Historical rows are inserted from the private
+ * snapshot archive; live rows retain their feed-id upsert behavior.
  */
 @Entity
 @Table(name = "road_closures")
@@ -26,7 +26,7 @@ public class RoadClosure {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    /** The feed's own identifier (properties.id, e.g. "8/2025"). */
+    /** Live feed id, or a derived id for one historical source-id/valid-from occurrence. */
     @Column(unique = true, nullable = false)
     private String feedId;
 
@@ -53,7 +53,7 @@ public class RoadClosure {
 
     private Long validTo;
 
-    /** Full feed geometry: usually a GeometryCollection of one label Point plus affected-stretch LineStrings. */
+    /** Full feed geometry: GeometryCollection in the live feed; MultiLineString or Point in legacy snapshots. */
     @Column(columnDefinition = "geometry(Geometry, 4326)")
     private Geometry geometry;
 

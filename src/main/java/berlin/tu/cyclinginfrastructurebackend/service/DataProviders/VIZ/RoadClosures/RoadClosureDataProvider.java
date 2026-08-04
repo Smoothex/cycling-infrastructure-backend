@@ -9,6 +9,7 @@ import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRe
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.ExternalDataProvider;
 import jakarta.annotation.PostConstruct;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.slf4j.Logger;
@@ -114,7 +115,9 @@ public class RoadClosureDataProvider implements ExternalDataProvider {
         }
 
         @SuppressWarnings("unchecked")
-        List<RoadClosureEntry> candidates = spatialIndex.query(geom.getEnvelopeInternal());
+        Envelope queryEnvelope = new Envelope(geom.getEnvelopeInternal());
+        queryEnvelope.expandBy(PROXIMITY_DEGREES);
+        List<RoadClosureEntry> candidates = spatialIndex.query(queryEnvelope);
 
         List<SegmentExternalFactor> factors = new ArrayList<>();
 

@@ -168,11 +168,11 @@ A unique constraint on `(segment_id, factorType, source, validFrom)` prevents du
 
 ### `road_closures`
 
-One entry per feature in the VIZ Berlin Baustellen/Sperrungen (construction/closures) live feed, imported by `RoadClosureImportService`. The feed is a snapshot of currently active and planned entries; imports upsert by `feedId` and never delete, so this table accumulates history — rows that disappear from a later feed version simply stop being updated (`lastSeenAt` stalls) rather than being removed. This is distinct from `segment_external_factors`: the enrichment pipeline reads this table to attach `SegmentExternalFactor` rows to nearby segment events, while `GET /api/road-closures` (see [data-export.md](data-export.md)) exposes these rows directly for map display.
+One normalized occurrence from either the private historical VIZ snapshots or the VIZ Berlin Baustellen/Sperrungen (construction/closures) live feed, imported by `RoadClosureImportService`. Historical snapshots are inserted once into a database; live imports retain their existing upsert behavior. This is distinct from `segment_external_factors`: the enrichment pipeline reads this table to attach `SegmentExternalFactor` rows to nearby segment events, while `GET /api/road-closures` (see [data-export.md](data-export.md)) exposes these rows directly for map display.
 
 | Field | Type | Description |
 |---|---|---|
-| `feedId` | string (unique) | The feed's own identifier (e.g. `"8/2025"`); import upsert key |
+| `feedId` | string (unique) | Live feed identifier (e.g. `"8/2025"`) or historical occurrence key `historical:<source-id>:<validFrom-epoch>` |
 | `lmsId` | string | Feed-internal LMS identifier |
 | `factorType` | enum | Mapped from the feed's `subtype` — see below |
 | `severity` | enum | `NO_CLOSURE`, `FULL_CLOSURE`, `DIRECTIONAL_CLOSURE`, `UNKNOWN` |
