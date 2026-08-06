@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -29,6 +30,7 @@ public class StreetSegmentService {
     private final StreetSegmentRepository repository;
     private final SegmentEventRepository segmentEventRepository;
     private final TransactionTemplate transactionTemplate;
+    private final TransactionTemplate segmentCreationTransactionTemplate;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public StreetSegmentService(StreetSegmentRepository repository,
@@ -37,6 +39,9 @@ public class StreetSegmentService {
         this.repository = repository;
         this.segmentEventRepository = segmentEventRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.segmentCreationTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.segmentCreationTransactionTemplate.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     public void recordUsage(List<EdgeIteratorState> edges, GraphHopperService hopperService) {
@@ -89,7 +94,10 @@ public class StreetSegmentService {
             return;
         }
 
-        transactionTemplate.executeWithoutResult(status -> {
+        // Segment rows may be created while a ride-analysis transaction is active. Commit
+        // these inserts separately so their subset locks are released before that outer
+        // transaction takes the complete, ordered event-segment lock.
+        segmentCreationTransactionTemplate.executeWithoutResult(status -> {
             for (SegmentUpsert segment : missingSegments) {
                 repository.upsertSegment(segment.id(), segment.name(), segment.geometry(), segment.gradientPercent());
             }

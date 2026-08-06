@@ -6,6 +6,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.service.ApiAnalyticsService;
 import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
+import berlin.tu.cyclinginfrastructurebackend.service.RouteComparisonExportService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
@@ -14,11 +15,15 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.PipelineStatusDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -27,11 +32,14 @@ public class AnalyticsController {
 
     private final ApiAnalyticsService analyticsService;
     private final CorridorGeometryService corridorGeometryService;
+    private final RouteComparisonExportService routeComparisonExportService;
 
     public AnalyticsController(ApiAnalyticsService analyticsService,
-                               CorridorGeometryService corridorGeometryService) {
+                               CorridorGeometryService corridorGeometryService,
+                               RouteComparisonExportService routeComparisonExportService) {
         this.analyticsService = analyticsService;
         this.corridorGeometryService = corridorGeometryService;
+        this.routeComparisonExportService = routeComparisonExportService;
     }
 
     @GetMapping("/summary")
@@ -102,5 +110,21 @@ public class AnalyticsController {
 
         return analyticsService.getInfrastructureSignals(
                 dimension, minRideCount, limit, from, to, rideIntent);
+    }
+
+    @GetMapping(value = "/route-comparisons/calibration.csv", produces = "text/csv")
+    public ResponseEntity<String> exportRouteComparisonCalibrationSample(
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(defaultValue = "50") int perType) {
+
+        int safePerType = Math.max(1, Math.min(perType, 200));
+        String csv = routeComparisonExportService.exportCalibrationSample(from, to, safePerType);
+
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"route-comparison-calibration.csv\"")
+                .body(csv);
     }
 }

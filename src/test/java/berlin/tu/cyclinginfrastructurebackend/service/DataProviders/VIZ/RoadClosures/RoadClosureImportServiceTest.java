@@ -17,6 +17,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RoadClosureImportServiceTest {
@@ -84,8 +86,22 @@ class RoadClosureImportServiceTest {
         assertThat(closures.size()).isEqualTo(8_775);
     }
 
-    private RoadClosureImportService service() {
+    @Test
+    void skipsStaticArchiveWhenHistoricalClosuresAreAlreadyStored() {
         RoadClosureRepository repository = mock(RoadClosureRepository.class);
+        when(repository.existsByFeedIdStartingWith("historical:")).thenReturn(true);
+
+        service(repository).importHistoricalSnapshots(tempDir.resolve("historical"));
+
+        verify(repository).existsByFeedIdStartingWith("historical:");
+        verify(repository, never()).saveAll(org.mockito.ArgumentMatchers.any());
+    }
+
+    private RoadClosureImportService service() {
+        return service(mock(RoadClosureRepository.class));
+    }
+
+    private RoadClosureImportService service(RoadClosureRepository repository) {
         RestClient.Builder builder = mock(RestClient.Builder.class);
         when(builder.build()).thenReturn(mock(RestClient.class));
         return new RoadClosureImportService(

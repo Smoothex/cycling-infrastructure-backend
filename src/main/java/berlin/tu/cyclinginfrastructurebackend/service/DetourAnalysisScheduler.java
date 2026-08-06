@@ -123,10 +123,9 @@ public class DetourAnalysisScheduler {
         Duration totalDuration = Duration.between(runStart, Instant.now());
         double ridesPerSec = completedCount.get() / Math.max(totalDuration.toMillis() / 1000.0, 0.001);
         long pendingAfterBatch = rideRepository.countByStatus(Status.PENDING);
-        log.info("=== Detour analysis batch finished: {} processed, {} alternative routes, {} skipped, {} errors "
+        log.info("=== Detour analysis batch finished: {} processed, {} skipped, {} errors "
                         + "in {} ({} rides/sec) | {} rides pending ===",
                 count(statusCounts, Status.PROCESSED),
-                count(statusCounts, Status.ALTERNATIVE_ROUTE),
                 count(statusCounts, Status.SKIPPED),
                 count(statusCounts, Status.ERROR),
                 formatDuration(totalDuration),

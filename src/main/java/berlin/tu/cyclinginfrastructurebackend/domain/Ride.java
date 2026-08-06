@@ -3,6 +3,7 @@ package berlin.tu.cyclinginfrastructurebackend.domain;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -65,7 +66,10 @@ public class Ride {
     private Double actualDistance;
     private Double shortestPathDistance;
     private Boolean isDetour;
-    private Double overlapRatio;    // actual overlap with shortest path
+    private Double overlapRatio;    // share of shortest-path length spatially covered by the actual route
+
+    @Enumerated(EnumType.STRING)
+    private RouteComparisonType routeComparisonType;
 
     @Enumerated(EnumType.STRING)
     private RideIntent rideIntent;

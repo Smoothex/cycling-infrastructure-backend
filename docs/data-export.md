@@ -284,10 +284,14 @@ Overall counts: total rides, processed rides, total events, enrichment coverage 
     "rideStatusCounts": {
         "PENDING": 2755,
         "ANALYZING": 8,
-        "PROCESSED": 1396,
-        "ALTERNATIVE_ROUTE": 584,
+        "PROCESSED": 1980,
         "SKIPPED": 0,
         "ERROR": 10
+    },
+    "routeComparisonTypeCounts": {
+        "EQUIVALENT_ROUTE": 900,
+        "LOCAL_DETOUR": 496,
+        "CORRIDOR_ALTERNATIVE": 584
     },
     "totalSegments": 233694,
     "observedSegments": 222964,
@@ -314,8 +318,7 @@ Per-stage pipeline health: ride processing status breakdown and per-enrichment-s
     "rideStatusCounts": {
         "PENDING": 2755,
         "ANALYZING": 8,
-        "PROCESSED": 1396,
-        "ALTERNATIVE_ROUTE": 584,
+        "PROCESSED": 1980,
         "SKIPPED": 0,
         "ERROR": 10
     },
@@ -346,6 +349,11 @@ Per-stage pipeline health: ride processing status breakdown and per-enrichment-s
     }
 }
 ```
+
+**`GET /api/analytics/route-comparisons/calibration.csv`**  
+Downloads a deterministic, class-balanced sample for offline route-comparison review. Optional `from` and `to` parameters filter by ride start time; `perType` controls the number of rides per baseline class and is constrained to 1–200. The CSV contains both route geometries as WKT, the continuous comparison metrics, GPS accuracy context, and empty `review_label` and `review_notes` columns. This export is for manual calibration and is not queried by the frontend.
+
+Permitted manual labels are `EQUIVALENT_ROUTE`, `LOCAL_DETOUR`, `CORRIDOR_ALTERNATIVE`, and `AMBIGUOUS_OR_INVALID`. Labels remain in the downloaded file; the endpoint does not write them back to the application.
 
 **`GET /api/analytics/distribution?dimension=HOUR_OF_DAY`**  
 Event distribution broken down by a dimension. Returns one entry per dimension value, sorted by total event count. Also accepts `from`, `to`, `eventType`, `rideIntent`, `trafficCondition`, `enrichmentFilters`, and `limit` (default `50`, clamped to `[1, 200]`).

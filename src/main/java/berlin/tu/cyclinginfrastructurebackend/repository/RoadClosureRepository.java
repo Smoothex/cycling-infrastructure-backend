@@ -15,6 +15,8 @@ public interface RoadClosureRepository extends JpaRepository<RoadClosure, UUID> 
 
     Optional<RoadClosure> findByFeedId(String feedId);
 
+    boolean existsByFeedIdStartingWith(String prefix);
+
     /**
      * Road closures whose validity range overlaps the given epoch-ms window.
      * Null bounds are open; a null validTo means the closure is open-ended.

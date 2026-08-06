@@ -1,6 +1,8 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
@@ -8,6 +10,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,17 +31,35 @@ import static org.mockito.Mockito.when;
 class ApiAnalyticsServiceTest {
 
     private final EntityManager entityManager = mock(EntityManager.class);
+    private final RideRepository rideRepository = mock(RideRepository.class);
     private final StreetSegmentRepository streetSegmentRepository = mock(StreetSegmentRepository.class);
+    private final SegmentEventRepository segmentEventRepository = mock(SegmentEventRepository.class);
     private final ApiAnalyticsService service = new ApiAnalyticsService(
-            mock(RideRepository.class),
+            rideRepository,
             streetSegmentRepository,
-            mock(SegmentEventRepository.class),
+            segmentEventRepository,
             entityManager);
 
     @BeforeEach
     void resetEntityManager() {
         org.mockito.Mockito.reset(entityManager);
+        org.mockito.Mockito.reset(rideRepository);
         org.mockito.Mockito.reset(streetSegmentRepository);
+        org.mockito.Mockito.reset(segmentEventRepository);
+    }
+
+    @Test
+    void processingSummarySeparatesStatusAndRouteComparisonCounts() {
+        when(rideRepository.count()).thenReturn(10L);
+        when(rideRepository.countByStatus(Status.PROCESSED)).thenReturn(7L);
+        when(rideRepository.countByRouteComparisonType(RouteComparisonType.LOCAL_DETOUR)).thenReturn(4L);
+
+        ProcessingSummaryDto result = service.getProcessingSummary();
+
+        assertThat(result.rideStatusCounts().get("PROCESSED")).isEqualTo(7L);
+        assertThat(result.routeComparisonTypeCounts().get("LOCAL_DETOUR")).isEqualTo(4L);
+        assertThat(result.routeComparisonTypeCounts()).containsKeys(
+                "EQUIVALENT_ROUTE", "LOCAL_DETOUR", "CORRIDOR_ALTERNATIVE");
     }
 
     @Test

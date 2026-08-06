@@ -54,7 +54,7 @@ The `bike_access` value is directional, so applicable one-way restrictions are r
 
 For eligible rides, the shortest-path profile computes this path between the first and last GPS points. Both the actual traversed edge IDs and the shortest-path edge IDs are stored per ride. The separate map-matching profile is kept even though its current weights are identical, because changing how noisy GPS observations are reconstructed should not silently change the analytical baseline.
 
-### 3. Detour Detection
+### 3. Route Comparison
 
 A ride is a detour if:
 
@@ -62,13 +62,19 @@ A ride is a detour if:
 actual_distance > shortest_path_distance × (1 + threshold)
 ```
 
-The threshold defaults to **10%** (`analysis.detour.threshold=0.10`). Rides within 10% of the shortest path are considered non-detours and generate no avoidance or preference events.
+The threshold defaults to **10%** (`analysis.detour.threshold=0.10`). Rides within 10% of the shortest path are classified as `EQUIVALENT_ROUTE` and generate no avoidance or preference events.
 
-### 4. Alternative Route Filtering
+### 4. Local Detour and Corridor Alternative Classification
 
-Not every detour means the cyclist avoided specific segments — sometimes they took a completely different path (different neighborhood, different corridor). These are classified as **ALTERNATIVE_ROUTE** and skipped from event generation.
+Not every detour means the cyclist avoided specific segments — sometimes they took a completely different path (different neighborhood, different corridor). Route comparison is stored separately from processing status:
 
-Detection: if fewer than 30% of the shortest-path edges spatially overlap with the actual route, it is an alternative route rather than a local detour.
+- `EQUIVALENT_ROUTE` — no detour according to the configured distance threshold
+- `LOCAL_DETOUR` — a detour that remains on the same general corridor
+- `CORRIDOR_ALTERNATIVE` — a detour that follows a substantially different corridor
+
+For every successfully routed ride, overlap is measured as the share of the shortest path's physical length that lies inside a metric buffer around the actual route. Both paths are transformed to EPSG:25833 before buffering and measuring, so distances are calculated in meters. The buffer uses the same configurable **20-meter** tolerance as spatial edge filtering.
+
+This length-based measurement is independent of how GraphHopper splits streets into edges and has the same meaning for detour and non-detour rides. If a candidate detour covers less than **30%** of the shortest path (`analysis.route-overlap.minimum-ratio=0.30`), it is classified as `CORRIDOR_ALTERNATIVE`; otherwise it is `LOCAL_DETOUR`. Both are successfully processed rides, but only local detours generate segment events.
 
 ### 5. Spatial Edge Filtering
 
@@ -78,14 +84,14 @@ This uses a PostGIS `ST_DWithin` query in meters.
 
 ### 6. Event Registration
 
-For detour rides, two sets of events are created:
+For `LOCAL_DETOUR` rides, two sets of events are created:
 
 - **Avoidance events** — shortest-path edges that were spatially distant from the actual ride. Bearings come from the shortest-path geometry.
 - **Preference events** — actual ride edges that were spatially distant from the shortest path. Bearings come from map-matching output.
 
 Each event stores the edge ID, bearing (compass direction), and an estimated timestamp (the moment the rider was closest to that edge).
 
-For **non-detour rides**, only the usage count is incremented — no avoidance or preference events are generated.
+For `EQUIVALENT_ROUTE` and `CORRIDOR_ALTERNATIVE` rides, no avoidance or preference events are generated.
 
 ## Ride Intent Classification
 
@@ -115,7 +121,7 @@ A score is computed from multiple signals. If `score ≥ 2` → COMMUTE; if `sco
 |---|---|
 | No detour (followed shortest path) | +1 |
 | Is a detour | −1 |
-| Status is ALTERNATIVE_ROUTE | −2 |
+| Route comparison is CORRIDOR_ALTERNATIVE | −2 |
 | Overlap ratio ≥ 85% | +1 |
 | Actual/shortest distance ratio ≤ 1.15 | +1 |
 | Actual/shortest distance ratio ≥ 1.50 | −2 |
@@ -134,7 +140,7 @@ A score is computed from multiple signals. If `score ≥ 2` → COMMUTE; if `sco
 Detour analysis runs one GraphHopper routing query and several database round trips per ride, across a batch of up to `pipeline.analysis.batch-size` rides on `pipeline.analysis.thread-pool-size` parallel threads. Three things keep this fast at scale:
 
 - **Contraction Hierarchy (CH) routing.** Finding a minimum-distance path on a country-sized road network means searching outward through millions of intersections until the destination turns up - too slow to do for every ride. CH fixes this with one-time prep at startup: it ranks intersections by importance and adds direct shortcuts between the important ones, similar to how a road atlas highlights highways over side streets. At query time, GraphHopper mostly follows these shortcuts instead of the full street grid, so a route lookup drops from seconds to single-digit milliseconds. See the README's "Run the backend in Docker" section for the one-time prep cost.
-- **Single-transaction analysis.** `DetourAnalysisService.analyzeRide` loads, mutates, and persists a `Ride` within one transaction, so the entity stays managed throughout and Hibernate flushes only the changed fields on commit. On any error the transaction rolls back and the ride is marked `ERROR` separately, so no partial analysis results are ever persisted.
+- **Atomic ride analysis with isolated segment creation.** `DetourAnalysisService.analyzeRide` keeps the ride, counters, and events in one main transaction. Missing `street_segments` reference rows are created first in a short `REQUIRES_NEW` transaction, releasing those subset locks before the main transaction locks its complete segment set in ascending order. This prevents parallel rides from deadlocking while preserving atomic counter and event updates. If the main analysis later fails, an unused reference row may remain with zero observations, but no partial analytical signal is persisted.
 - **Indexed per-ride lookups.** `ride_points.ride_id` and `ride_edges.ride_id` are indexed (see [data-model.md](data-model.md)), so loading a ride's GPS trace and traversed edges is an index lookup rather than a full table scan, independent of how many rides have accumulated in the database.
 
 ## Scheduler Configuration
@@ -147,4 +153,5 @@ Detour analysis runs one GraphHopper routing query and several database round tr
 | `pipeline.analysis.thread-pool-size` | `8` | Parallel GraphHopper workers |
 | `analysis.minimum-origin-destination-distance-meters` | `500` | Minimum geodesic distance between the first and last valid GPS points |
 | `analysis.detour.threshold` | `0.10` | Detour detection threshold (10%) |
+| `analysis.route-overlap.minimum-ratio` | `0.30` | Minimum spatially covered share of the shortest path for a local detour |
 | `analysis.spatial.proximity-meters` | `20` | Parallel path tolerance (meters) |
