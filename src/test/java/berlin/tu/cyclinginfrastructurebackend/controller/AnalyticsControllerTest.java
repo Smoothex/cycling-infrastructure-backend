@@ -3,6 +3,7 @@ package berlin.tu.cyclinginfrastructurebackend.controller;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.service.ApiAnalyticsService;
 import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
+import berlin.tu.cyclinginfrastructurebackend.service.RouteComparisonExportService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
@@ -30,20 +31,24 @@ class AnalyticsControllerTest {
 
     private final ApiAnalyticsService analyticsService = mock(ApiAnalyticsService.class);
     private final CorridorGeometryService corridorGeometryService = mock(CorridorGeometryService.class);
+    private final RouteComparisonExportService routeComparisonExportService = mock(RouteComparisonExportService.class);
     private final MockMvc mockMvc = MockMvcBuilders
-            .standaloneSetup(new AnalyticsController(analyticsService, corridorGeometryService))
+            .standaloneSetup(new AnalyticsController(
+                    analyticsService, corridorGeometryService, routeComparisonExportService))
             .build();
 
     @Test
     void summaryReturnsProcessingCounters() throws Exception {
         when(analyticsService.getProcessingSummary()).thenReturn(new ProcessingSummaryDto(
-                10, Map.of("PROCESSED", 7L), 20, 12, 30, 1000L, 2000L,
+                10, Map.of("PROCESSED", 7L), Map.of("LOCAL_DETOUR", 4L),
+                20, 12, 30, 1000L, 2000L,
                 Map.of("AVOIDANCE", 18L, "PREFERENCE", 12L), 5, 6, 7, 8, 9));
 
         mockMvc.perform(get("/api/analytics/summary"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalRides").value(10))
-                .andExpect(jsonPath("$.rideStatusCounts.PROCESSED").value(7));
+                .andExpect(jsonPath("$.rideStatusCounts.PROCESSED").value(7))
+                .andExpect(jsonPath("$.routeComparisonTypeCounts.LOCAL_DETOUR").value(4));
     }
 
     @Test
@@ -120,5 +125,26 @@ class AnalyticsControllerTest {
         verify(analyticsService).getInfrastructureSignals(
                 eq(AnalysisDimension.SURFACE), eq(20), eq(10),
                 eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void calibrationExportReturnsDownloadableCsvAndClampsPerType() throws Exception {
+        when(routeComparisonExportService.exportCalibrationSample(1000L, 2000L, 200))
+                .thenReturn("ride_id,review_label\n");
+
+        mockMvc.perform(get("/api/analytics/route-comparisons/calibration.csv")
+                        .param("from", "1000")
+                        .param("to", "2000")
+                        .param("perType", "500"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Content-Disposition",
+                                "attachment; filename=\"route-comparison-calibration.csv\""))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .contentTypeCompatibleWith("text/csv"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .string("ride_id,review_label\n"));
+
+        verify(routeComparisonExportService).exportCalibrationSample(1000L, 2000L, 200);
     }
 }

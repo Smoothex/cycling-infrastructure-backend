@@ -3,6 +3,7 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,7 @@ public class RideIntentClassifier {
     private static final int CONFIDENCE_THRESHOLD = 2;
 
     public void classify(Ride ride) {
-        if (ride.getStatus() != Status.PROCESSED && ride.getStatus() != Status.ALTERNATIVE_ROUTE) {
+        if (ride.getStatus() != Status.PROCESSED) {
             ride.setRideIntent(RideIntent.UNKNOWN);
             return;
         }
@@ -80,14 +81,17 @@ public class RideIntentClassifier {
         }
 
         // Route directness
-        if (Boolean.FALSE.equals(ride.getIsDetour())) {
+        RouteComparisonType comparisonType = ride.getRouteComparisonType();
+        if (comparisonType == RouteComparisonType.EQUIVALENT_ROUTE) {
+            score += 1;
+        } else if (comparisonType == RouteComparisonType.LOCAL_DETOUR) {
+            score -= 1;
+        } else if (comparisonType == RouteComparisonType.CORRIDOR_ALTERNATIVE) {
+            score -= 3;
+        } else if (Boolean.FALSE.equals(ride.getIsDetour())) {
             score += 1;
         } else if (Boolean.TRUE.equals(ride.getIsDetour())) {
             score -= 1;
-        }
-
-        if (ride.getStatus() == Status.ALTERNATIVE_ROUTE) {
-            score -= 2;
         }
 
         if (ride.getOverlapRatio() != null && ride.getOverlapRatio() >= 0.85) {

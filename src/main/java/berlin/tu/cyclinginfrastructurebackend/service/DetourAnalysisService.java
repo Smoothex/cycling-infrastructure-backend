@@ -2,6 +2,7 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
@@ -35,12 +36,10 @@ public class DetourAnalysisService {
     private final StreetSegmentService streetSegmentService;
     private final StreetSegmentRepository streetSegmentRepository;
     private final RideIntentClassifier rideIntentClassifier;
+    private final RouteComparisonClassifier routeComparisonClassifier;
     private final TransactionTemplate transactionTemplate;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     private final WKTWriter wktWriter = new WKTWriter();
-
-    @Value("${analysis.detour.threshold}")
-    private double detourThreshold;
 
     @Value("${analysis.spatial.proximity-meters}")
     private double proximityMeters;
@@ -50,12 +49,14 @@ public class DetourAnalysisService {
                                  StreetSegmentService streetSegmentService,
                                  StreetSegmentRepository streetSegmentRepository,
                                  RideIntentClassifier rideIntentClassifier,
+                                 RouteComparisonClassifier routeComparisonClassifier,
                                  PlatformTransactionManager transactionManager) {
         this.graphHopperService = graphHopperService;
         this.rideRepository = rideRepository;
         this.streetSegmentService = streetSegmentService;
         this.streetSegmentRepository = streetSegmentRepository;
         this.rideIntentClassifier = rideIntentClassifier;
+        this.routeComparisonClassifier = routeComparisonClassifier;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -82,7 +83,7 @@ public class DetourAnalysisService {
         return result;
     }
 
-    private Status analyzeLoadedRide(Ride ride) {
+    Status analyzeLoadedRide(Ride ride) {
         List<RidePoint> points = ride.getRidePoints().stream()
                 .filter(p -> p.getLocation() != null)
                 .sorted(Comparator.comparingLong(RidePoint::getTimestamp))
@@ -126,10 +127,23 @@ public class DetourAnalysisService {
         ride.setShortestPathDistance(shortestPathDistance);
         ride.setActualDistance(actualDistance);
 
-        boolean isDetour = actualDistance > shortestPathDistance * (1.0 + detourThreshold);
-        ride.setIsDetour(isDetour);
+        double overlapRatio = calculateSpatialLengthOverlap(ride.getTrajectory(), shortestPathGeometry);
+        ride.setOverlapRatio(overlapRatio);
 
-        if (isDetour) {
+        RouteComparisonType comparisonType = routeComparisonClassifier.classify(
+                actualDistance, shortestPathDistance, overlapRatio);
+        ride.setRouteComparisonType(comparisonType);
+        ride.setIsDetour(comparisonType != RouteComparisonType.EQUIVALENT_ROUTE);
+
+        if (comparisonType == RouteComparisonType.CORRIDOR_ALTERNATIVE) {
+            log.debug("Ride {} is a CORRIDOR ALTERNATIVE. Skipping edge registration.", ride.getId());
+            ride.setStatus(Status.PROCESSED);
+            rideIntentClassifier.classify(ride);
+            return Status.PROCESSED;
+        }
+
+        if (comparisonType == RouteComparisonType.LOCAL_DETOUR) {
+
             Set<Integer> allEdges = new HashSet<>(shortestEdges);
             allEdges.addAll(actualEdges);
 
@@ -138,17 +152,6 @@ public class DetourAnalysisService {
             LineString actualTrajectory = ride.getTrajectory();
             Set<Integer> avoidedEdges = filterSpatiallyDistantEdges(
                     shortestEdges, actualEdges, actualTrajectory);
-
-            double overlapRatio = shortestEdges.isEmpty() ? 1.0
-                    : (double) (shortestEdges.size() - avoidedEdges.size()) / shortestEdges.size();
-            ride.setOverlapRatio(overlapRatio);
-
-            if (isAlternativeRoute(shortestEdges, avoidedEdges, 0.30)) {
-                log.debug("Ride {} is an ALTERNATIVE ROUTE (overlap < 30%). Skipping edge registration.", ride.getId());
-                ride.setStatus(Status.ALTERNATIVE_ROUTE);
-                rideIntentClassifier.classify(ride);
-                return Status.ALTERNATIVE_ROUTE;
-            }
 
             Set<Integer> chosenEdges = filterSpatiallyDistantEdges(
                     actualEdges, shortestEdges, shortestPathGeometry);
@@ -182,15 +185,6 @@ public class DetourAnalysisService {
 
             return Status.PROCESSED;
         }
-
-        int sharedEdges = 0;
-        for (Integer edgeId : shortestEdges) {
-            if (actualEdges.contains(edgeId))
-                sharedEdges++;
-        }
-        double overlapRatio = shortestEdges.isEmpty() ? 1.0
-                : (double) sharedEdges / shortestEdges.size();
-        ride.setOverlapRatio(overlapRatio);
 
         ride.setStatus(Status.PROCESSED);
         rideIntentClassifier.classify(ride);
@@ -256,27 +250,20 @@ public class DetourAnalysisService {
     }
 
     /**
-     * Determines if the cyclist took a completely different path (an alternative route)
-     * rather than making a local detour along the shortest path. This is calculated by
-     * checking the ratio of shared edges vs. total shortest path edges.
-     *
-     * @param shortestEdges    The set of all edge IDs in the theoretical shortest path
-     * @param avoidedEdges     The set of shortest path edges that were physically distant from the actual ride
-     * @param minOverlapRatio  The minimum required overlap (e.g., 0.3 for 30%) to be considered the same general route
-     * @return                 True if the overlap is below the threshold, indicating an alternative route
+     * Calculates the share of the shortest path lying inside the configured metric buffer
+     * around the actual route. Independent of how GraphHopper splits a physical street into edges.
      */
-    private boolean isAlternativeRoute(Set<Integer> shortestEdges,
-                                       Set<Integer> avoidedEdges,
-                                       double minOverlapRatio) {
-        if (shortestEdges.isEmpty()) return false;
+    private double calculateSpatialLengthOverlap(LineString actualPath, LineString shortestPath) {
+        Double overlapRatio = rideRepository.calculateSpatialLengthOverlap(
+                wktWriter.write(actualPath),
+                wktWriter.write(shortestPath),
+                proximityMeters);
 
-        int overlappingEdgesCount = shortestEdges.size() - avoidedEdges.size();
-        double overlapRatio = (double) overlappingEdgesCount / shortestEdges.size();
-
-        log.debug("Route overlap ratio: {} ({} overlapping / {} total shortest path edges)",
-                String.format("%.2f", overlapRatio), overlappingEdgesCount, shortestEdges.size());
-
-        return overlapRatio < minOverlapRatio;
+        if (overlapRatio == null || !Double.isFinite(overlapRatio)
+                || overlapRatio < 0.0 || overlapRatio > 1.0) {
+            throw new IllegalStateException("Could not calculate a valid spatial length overlap ratio");
+        }
+        return overlapRatio;
     }
 
     /**

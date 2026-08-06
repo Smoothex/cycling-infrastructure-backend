@@ -1,6 +1,7 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEnrichmentFilter;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
@@ -53,6 +54,11 @@ public class ApiAnalyticsService {
             rideStatusCounts.put(status.name(), rideRepository.countByStatus(status));
         }
 
+        Map<String, Long> routeComparisonTypeCounts = new LinkedHashMap<>();
+        for (RouteComparisonType type : RouteComparisonType.values()) {
+            routeComparisonTypeCounts.put(type.name(), rideRepository.countByRouteComparisonType(type));
+        }
+
         Map<String, Long> eventTypeCounts = new LinkedHashMap<>();
         for (SegmentEventType eventType : SegmentEventType.values()) {
             eventTypeCounts.put(eventType.name(), segmentEventRepository.countByEventType(eventType));
@@ -61,6 +67,7 @@ public class ApiAnalyticsService {
         return new ProcessingSummaryDto(
                 rideRepository.count(),
                 rideStatusCounts,
+                routeComparisonTypeCounts,
                 streetSegmentRepository.count(),
                 streetSegmentRepository.countObservedSegments(),
                 segmentEventRepository.count(),

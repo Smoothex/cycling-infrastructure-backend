@@ -47,6 +47,7 @@ public class RoadClosureImportService {
     private static final ZoneId BERLIN_ZONE = ZoneId.of("Europe/Berlin");
     static final DateTimeFormatter BERLIN_DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
     private static final String HISTORICAL_DIRECTORY_NAME = "historical";
+    private static final String HISTORICAL_FEED_ID_PREFIX = "historical:";
 
     private final RoadClosureRepository roadClosureRepository;
     private final RestClient restClient;
@@ -84,7 +85,12 @@ public class RoadClosureImportService {
      * they are inserted, so this path deliberately performs no historical
      * upserts or legacy-row migration.
      */
-    private void importHistoricalSnapshots(Path historicalDirectory) {
+    void importHistoricalSnapshots(Path historicalDirectory) {
+        if (roadClosureRepository.existsByFeedIdStartingWith(HISTORICAL_FEED_ID_PREFIX)) {
+            log.info("Historical VIZ road closures are already stored; skipping static archive import.");
+            return;
+        }
+
         List<RoadClosure> closures = loadHistoricalClosures(historicalDirectory, System.currentTimeMillis());
         if (closures.isEmpty()) {
             return;
@@ -212,7 +218,7 @@ public class RoadClosureImportService {
     }
 
     private static String historicalFeedId(HistoricalOccurrenceKey key) {
-        return "historical:" + key.sourceId() + ":" + key.validFrom();
+        return HISTORICAL_FEED_ID_PREFIX + key.sourceId() + ":" + key.validFrom();
     }
 
     private static boolean isLater(HistoricalRevision candidate, HistoricalRevision current) {

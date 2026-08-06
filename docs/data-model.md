@@ -26,23 +26,22 @@ The central entity. One record per imported SimRa ride file.
 | `shortestPath` | LineString (4326) | GraphHopper shortest path between start and end |
 | `actualDistance` | double | Distance of the map-matched trajectory in meters |
 | `shortestPathDistance` | double | Distance of the shortest path in meters |
-| `isDetour` | boolean | True if actual > shortest × 1.10 |
-| `overlapRatio` | double | Fraction of shortest-path edges also present in actual route |
+| `isDetour` | boolean | False for `EQUIVALENT_ROUTE`; true for both detour comparison types |
+| `overlapRatio` | double | Fraction of shortest-path length inside the configured metric buffer around the actual route |
+| `routeComparisonType` | enum | `EQUIVALENT_ROUTE`, `LOCAL_DETOUR`, or `CORRIDOR_ALTERNATIVE` after successful analysis |
 | `originalFilename` | string | Source CSV filename |
 
 **Ride status lifecycle:**
 
 ```
 PENDING → ANALYZING → PROCESSED
-                    → ALTERNATIVE_ROUTE
                     → SKIPPED
                     → ERROR
 ```
 
 - `PENDING` — map-matched successfully, waiting for detour analysis
 - `ANALYZING` — claimed by a worker thread
-- `PROCESSED` — detour analysis complete
-- `ALTERNATIVE_ROUTE` — took a completely different corridor (< 30% edge overlap)
+- `PROCESSED` — route comparison completed successfully; the analytical outcome is stored in `routeComparisonType`
 - `SKIPPED` — too few points, no traversed edges, or routing failed
 - `ERROR` — unhandled exception during analysis
 

@@ -5,6 +5,7 @@ import java.util.Map;
 public record ProcessingSummaryDto(
         long totalRides,
         Map<String, Long> rideStatusCounts,
+        Map<String, Long> routeComparisonTypeCounts,
         long totalSegments,
         long observedSegments,
         long totalSegmentEvents,
