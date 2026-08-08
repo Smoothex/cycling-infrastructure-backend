@@ -26,7 +26,19 @@ services:
       - "-c"
       - "work_mem=64MB"
       - "-c"
-      - "synchronous_commit=off"
+      - "synchronous_commit=on"
+      - "-c"
+      - "wal_compression=on"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "min_wal_size=256MB"
+      - "-c"
+      - "checkpoint_timeout=15min"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=64MB"
 
   pgadmin:
     image: dpage/pgadmin4

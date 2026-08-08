@@ -49,19 +49,21 @@ public class StreetSegmentService {
             return;
         }
 
-        List<EdgeIteratorState> sortedEdges = edges.stream()
-                .sorted(Comparator.comparingLong(EdgeIteratorState::getEdge))
-                .toList();
-        List<Integer> edgeIds = sortedEdges.stream()
-                .map(EdgeIteratorState::getEdge)
-                .distinct()
+        Map<Long, Integer> usageByEdgeId = new TreeMap<>();
+        for (EdgeIteratorState edge : edges) {
+            usageByEdgeId.merge((long) edge.getEdge(), 1, Integer::sum);
+        }
+        List<Integer> edgeIds = usageByEdgeId.keySet().stream()
+                .map(Long::intValue)
                 .toList();
 
         ensureSegmentsExist(edgeIds, hopperService);
 
         transactionTemplate.executeWithoutResult(status -> {
-            for (EdgeIteratorState edge : sortedEdges) {
-                repository.incrementUsage((long) edge.getEdge());
+            int updatedRows = repository.incrementUsageCounts(usageByEdgeId);
+            if (updatedRows != usageByEdgeId.size()) {
+                throw new IllegalStateException("Expected to update " + usageByEdgeId.size()
+                        + " street segments, but updated " + updatedRows);
             }
         });
     }

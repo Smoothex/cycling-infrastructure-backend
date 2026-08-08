@@ -11,15 +11,8 @@ import java.util.Collection;
 import java.util.List;
 
 @Repository
-public interface StreetSegmentRepository extends JpaRepository<StreetSegment, Long> {
-
-    @Modifying
-    @Transactional
-    @Query("UPDATE StreetSegment s SET s.usageCount = s.usageCount + 1, " +
-            "s.avoidanceRatio = CAST(s.avoidanceCount AS double) / (s.usageCount + 1 + s.avoidanceCount), " +
-            "s.preferenceRatio = CAST(s.preferenceCount AS double) / (s.usageCount + 1) " +
-            "WHERE s.id = :id")
-    int incrementUsage(Long id);
+public interface StreetSegmentRepository
+        extends JpaRepository<StreetSegment, Long>, StreetSegmentUsageRepository {
 
     /**
      * Pre-locks rows in ascending id order before any batched increments. If a

@@ -9,6 +9,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.Traffic.
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeApiDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineWorkClaimService;
+import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,7 @@ public class ExternalFactorEnrichmentScheduler {
     private final TrafficDataProvider trafficDataProvider;
     private final PipelineWorkClaimService workClaimService;
     private final TileBuildService tileBuildService;
+    private final PipelineActivityTracker pipelineActivityTracker;
 
     @Value("${pipeline.enabled:true}")
     private boolean pipelineEnabled;
@@ -90,7 +92,8 @@ public class ExternalFactorEnrichmentScheduler {
                                              OhsomeApiDataProvider ohsomeApiDataProvider,
                                              TrafficDataProvider trafficDataProvider,
                                              PipelineWorkClaimService workClaimService,
-                                             TileBuildService tileBuildService) {
+                                             TileBuildService tileBuildService,
+                                             PipelineActivityTracker pipelineActivityTracker) {
         this.segmentEventRepository = segmentEventRepository;
         this.weatherDataProvider = weatherDataProvider;
         this.roadClosureDataProvider = roadClosureDataProvider;
@@ -98,6 +101,7 @@ public class ExternalFactorEnrichmentScheduler {
         this.trafficDataProvider = trafficDataProvider;
         this.workClaimService = workClaimService;
         this.tileBuildService = tileBuildService;
+        this.pipelineActivityTracker = pipelineActivityTracker;
     }
 
     @Scheduled(fixedDelayString = "${pipeline.enrichment.weather.delay-ms:60000}")
@@ -221,59 +225,61 @@ public class ExternalFactorEnrichmentScheduler {
             return;
         }
 
-        Instant startedAt = Instant.now();
-        Map<UUID, SegmentEvent> eventsById = segmentEventRepository.findWithSegmentByIdIn(eventIds)
-                .stream()
-                .collect(Collectors.toMap(SegmentEvent::getId, event -> event));
+        try (PipelineActivityTracker.Activity ignored = pipelineActivityTracker.beginWork()) {
+            Instant startedAt = Instant.now();
+            Map<UUID, SegmentEvent> eventsById = segmentEventRepository.findWithSegmentByIdIn(eventIds)
+                    .stream()
+                    .collect(Collectors.toMap(SegmentEvent::getId, event -> event));
 
-        int processed = 0;
-        int errors = 0;
-        log.debug("{} enrichment batch started. {} claimed events.", label, eventIds.size());
+            int processed = 0;
+            int errors = 0;
+            log.debug("{} enrichment batch started. {} claimed events.", label, eventIds.size());
 
-        try {
-            for (int i = 0; i < eventIds.size(); i++) {
-                UUID eventId = eventIds.get(i);
-                SegmentEvent event = eventsById.get(eventId);
-                if (event == null) {
-                    updateStatus.accept(eventId, EnrichmentStatus.ERROR);
-                    errors++;
-                    continue;
-                }
-
-                try {
-                    enrichAndMarkDone.accept(event);
-                    processed++;
-
-                    if (delayBetweenEventsMs > 0) {
-                        Thread.sleep(delayBetweenEventsMs);
+            try {
+                for (int i = 0; i < eventIds.size(); i++) {
+                    UUID eventId = eventIds.get(i);
+                    SegmentEvent event = eventsById.get(eventId);
+                    if (event == null) {
+                        updateStatus.accept(eventId, EnrichmentStatus.ERROR);
+                        errors++;
+                        continue;
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    updateStatus.accept(eventId, EnrichmentStatus.ERROR);
-                    log.warn("{} enrichment interrupted.", label);
-                    return;
-                } catch (ApiRateLimitException e) {
-                    Instant resumeAt = pauseAfterRateLimit(label, e.getRetryAt());
-                    List<UUID> unprocessed = eventIds.subList(i, eventIds.size());
-                    unprocessed.forEach(id -> updateStatus.accept(id, EnrichmentStatus.PENDING));
-                    log.warn("{} enrichment hit an API rate limit after {} events; released {} claimed "
-                                    + "events back to PENDING and paused until {}.",
-                            label, processed, unprocessed.size(), resumeAt);
-                    return;
-                } catch (Exception e) {
-                    updateStatus.accept(eventId, EnrichmentStatus.ERROR);
-                    log.error("Failed to enrich event {} ({}): {}", eventId, label, e.getMessage());
-                    errors++;
-                }
-            }
 
-            consecutiveRateLimits.remove(label);
-            Duration elapsed = Duration.between(startedAt, Instant.now());
-            log.info("=== {} enrichment batch complete. {} processed, {} errors in {}s ===",
-                    label, processed, errors, elapsed.toSeconds());
-        } finally {
-            if (processed > 0) {
-                tileBuildService.markDataChanged();
+                    try {
+                        enrichAndMarkDone.accept(event);
+                        processed++;
+
+                        if (delayBetweenEventsMs > 0) {
+                            Thread.sleep(delayBetweenEventsMs);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        updateStatus.accept(eventId, EnrichmentStatus.ERROR);
+                        log.warn("{} enrichment interrupted.", label);
+                        return;
+                    } catch (ApiRateLimitException e) {
+                        Instant resumeAt = pauseAfterRateLimit(label, e.getRetryAt());
+                        List<UUID> unprocessed = eventIds.subList(i, eventIds.size());
+                        unprocessed.forEach(id -> updateStatus.accept(id, EnrichmentStatus.PENDING));
+                        log.warn("{} enrichment hit an API rate limit after {} events; released {} claimed "
+                                        + "events back to PENDING and paused until {}.",
+                                label, processed, unprocessed.size(), resumeAt);
+                        return;
+                    } catch (Exception e) {
+                        updateStatus.accept(eventId, EnrichmentStatus.ERROR);
+                        log.error("Failed to enrich event {} ({}): {}", eventId, label, e.getMessage());
+                        errors++;
+                    }
+                }
+
+                consecutiveRateLimits.remove(label);
+                Duration elapsed = Duration.between(startedAt, Instant.now());
+                log.info("=== {} enrichment batch complete. {} processed, {} errors in {}s ===",
+                        label, processed, errors, elapsed.toSeconds());
+            } finally {
+                if (processed > 0) {
+                    tileBuildService.markDataChanged();
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.util;
 
+import berlin.tu.cyclinginfrastructurebackend.service.RideProcessingResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,38 +27,36 @@ public class ImportMetrics {
     private final AtomicInteger mapMatchSucceeded = new AtomicInteger(0);
     private final AtomicInteger mapMatchFailed = new AtomicInteger(0);
 
-    // Timing accumulators (in nanoseconds)
-    private final AtomicLong totalParseTimeNanos = new AtomicLong(0);
-    private final AtomicLong totalDbSaveTimeNanos = new AtomicLong(0);
-    private final AtomicLong totalMapMatchTimeNanos = new AtomicLong(0);
-
-    // Min/max tracking
-    private final AtomicLong maxParseTimeNanos = new AtomicLong(0);
-    private final AtomicLong maxDbSaveTimeNanos = new AtomicLong(0);
-    private final AtomicLong maxMapMatchTimeNanos = new AtomicLong(0);
+    private final TimingMetric parsing = new TimingMetric();
+    private final TimingMetric totalProcessing = new TimingMetric();
+    private final TimingMetric graphHopper = new TimingMetric();
+    private final TimingMetric timestampCalculation = new TimingMetric();
+    private final TimingMetric segmentUpdates = new TimingMetric();
+    private final TimingMetric ridePersistence = new TimingMetric();
 
     public ImportMetrics() {
         this.startTimeNanos = System.nanoTime();
     }
 
     public void recordParse(long durationNanos) {
-        totalParseTimeNanos.addAndGet(durationNanos);
-        updateMax(maxParseTimeNanos, durationNanos);
+        parsing.record(durationNanos);
     }
 
-    public void recordDbSave(long durationNanos) {
-        totalDbSaveTimeNanos.addAndGet(durationNanos);
-        updateMax(maxDbSaveTimeNanos, durationNanos);
-    }
-
-    public void recordMapMatch(long durationNanos, boolean success) {
-        totalMapMatchTimeNanos.addAndGet(durationNanos);
-        updateMax(maxMapMatchTimeNanos, durationNanos);
-        if (success) {
+    public void recordProcessing(RideProcessingResult result) {
+        totalProcessing.record(result.totalProcessingNanos());
+        graphHopper.recordIfMeasured(result.graphHopperNanos());
+        timestampCalculation.recordIfMeasured(result.timestampCalculationNanos());
+        segmentUpdates.recordIfMeasured(result.segmentUpdateNanos());
+        ridePersistence.recordIfMeasured(result.ridePersistenceNanos());
+        if (result.success()) {
             mapMatchSucceeded.incrementAndGet();
         } else {
             mapMatchFailed.incrementAndGet();
         }
+    }
+
+    public boolean hasSegmentUpdates() {
+        return segmentUpdates.sampleCount() > 0;
     }
 
     public void recordFileProcessed() {
@@ -107,22 +106,19 @@ public class ImportMetrics {
         log.info("───────────────────────────────────────────────────────────────────");
         log.info("Map Match Success:      {}", mapMatchSucceeded.get());
         log.info("Map Match Failed:       {}", mapMatchFailed.get());
-        log.info("Map Match Success Rate: {}%",
-                processed > 0 ? String.format("%.1f", (mapMatchSucceeded.get() * 100.0) / processed) : "N/A");
+        int processingAttempts = mapMatchSucceeded.get() + mapMatchFailed.get();
+        log.info("Map Match Success Rate: {}",
+                processingAttempts > 0
+                        ? String.format("%.1f%%", (mapMatchSucceeded.get() * 100.0) / processingAttempts)
+                        : "N/A");
         log.info("───────────────────────────────────────────────────────────────────");
         log.info("TIMING BREAKDOWN:");
-        log.info("  Parsing:      total={}  avg={}  max={}",
-                formatDuration(totalParseTimeNanos.get()),
-                processed > 0 ? formatDuration(totalParseTimeNanos.get() / processed) : "N/A",
-                formatDuration(maxParseTimeNanos.get()));
-        log.info("  DB Save:      total={}  avg={}  max={}",
-                formatDuration(totalDbSaveTimeNanos.get()),
-                processed > 0 ? formatDuration(totalDbSaveTimeNanos.get() / processed) : "N/A",
-                formatDuration(maxDbSaveTimeNanos.get()));
-        log.info("  Map Match:    total={}  avg={}  max={}",
-                formatDuration(totalMapMatchTimeNanos.get()),
-                processed > 0 ? formatDuration(totalMapMatchTimeNanos.get() / processed) : "N/A",
-                formatDuration(maxMapMatchTimeNanos.get()));
+        logTiming("Parsing", parsing);
+        logTiming("Total processing", totalProcessing);
+        logTiming("GraphHopper", graphHopper);
+        logTiming("Timestamp calculation", timestampCalculation);
+        logTiming("Segment updates", segmentUpdates);
+        logTiming("Ride persistence", ridePersistence);
         log.info("───────────────────────────────────────────────────────────────────");
 
         if (processed > 0) {
@@ -132,19 +128,16 @@ public class ImportMetrics {
         log.info("═══════════════════════════════════════════════════════════════════");
     }
 
-    /**
-     * Updates a shared maximum value using a compare-and-set loop so concurrent writers do not lose
-     * a larger measurement.
-     *
-     * @param max the shared maximum holder
-     * @param newValue the candidate value
-     */
-    private void updateMax(AtomicLong max, long newValue) {
-        long current;
-        do {
-            current = max.get();
-            if (newValue <= current) return;
-        } while (!max.compareAndSet(current, newValue));
+    private void logTiming(String label, TimingMetric metric) {
+        String average = metric.sampleCount() > 0
+                ? formatDuration(metric.totalNanos() / metric.sampleCount())
+                : "N/A";
+        log.info("  {}: total={}  avg={}  max={}  samples={}",
+                label,
+                formatDuration(metric.totalNanos()),
+                average,
+                formatDuration(metric.maxNanos()),
+                metric.sampleCount());
     }
 
     /**
@@ -174,6 +167,39 @@ public class ImportMetrics {
             } else {
                 return String.format("%.2fs", seconds + millis / 1000.0);
             }
+        }
+    }
+
+    private static final class TimingMetric {
+        private final AtomicLong totalNanos = new AtomicLong();
+        private final AtomicLong maxNanos = new AtomicLong();
+        private final AtomicLong sampleCount = new AtomicLong();
+
+        private void record(long durationNanos) {
+            if (durationNanos < 0) {
+                throw new IllegalArgumentException("Duration cannot be negative");
+            }
+            totalNanos.addAndGet(durationNanos);
+            maxNanos.accumulateAndGet(durationNanos, Math::max);
+            sampleCount.incrementAndGet();
+        }
+
+        private void recordIfMeasured(long durationNanos) {
+            if (durationNanos > 0) {
+                record(durationNanos);
+            }
+        }
+
+        private long totalNanos() {
+            return totalNanos.get();
+        }
+
+        private long maxNanos() {
+            return maxNanos.get();
+        }
+
+        private long sampleCount() {
+            return sampleCount.get();
         }
     }
 }

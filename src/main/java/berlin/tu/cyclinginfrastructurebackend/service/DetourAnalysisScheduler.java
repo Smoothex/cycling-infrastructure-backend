@@ -34,6 +34,7 @@ public class DetourAnalysisScheduler {
     private final Executor analysisExecutor;
     private final PipelineWorkClaimService workClaimService;
     private final TileBuildService tileBuildService;
+    private final PipelineActivityTracker pipelineActivityTracker;
 
     @Value("${pipeline.enabled:true}")
     private boolean pipelineEnabled;
@@ -57,12 +58,14 @@ public class DetourAnalysisScheduler {
                                    DetourAnalysisService detourAnalysisService,
                                    @Qualifier("analysisExecutor") Executor analysisExecutor,
                                    PipelineWorkClaimService workClaimService,
-                                   TileBuildService tileBuildService) {
+                                   TileBuildService tileBuildService,
+                                   PipelineActivityTracker pipelineActivityTracker) {
         this.rideRepository = rideRepository;
         this.detourAnalysisService = detourAnalysisService;
         this.analysisExecutor = analysisExecutor;
         this.workClaimService = workClaimService;
         this.tileBuildService = tileBuildService;
+        this.pipelineActivityTracker = pipelineActivityTracker;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -93,47 +96,49 @@ public class DetourAnalysisScheduler {
             return;
         }
 
-        long pendingAfterClaim = rideRepository.countByStatus(Status.PENDING);
-        log.info("=== Detour analysis batch started: {} rides claimed, {} still pending ===",
-                rideIds.size(), pendingAfterClaim);
+        try (PipelineActivityTracker.Activity ignored = pipelineActivityTracker.beginWork()) {
+            long pendingAfterClaim = rideRepository.countByStatus(Status.PENDING);
+            log.info("=== Detour analysis batch started: {} rides claimed, {} still pending ===",
+                    rideIds.size(), pendingAfterClaim);
 
-        Instant runStart = Instant.now();
-        AtomicInteger completedCount = new AtomicInteger();
-        Map<Status, AtomicInteger> statusCounts = new ConcurrentHashMap<>();
+            Instant runStart = Instant.now();
+            AtomicInteger completedCount = new AtomicInteger();
+            Map<Status, AtomicInteger> statusCounts = new ConcurrentHashMap<>();
 
-        List<CompletableFuture<Void>> futures = rideIds.stream()
-                .map(id -> CompletableFuture.runAsync(() -> {
-                    Status result;
-                    try {
-                        result = detourAnalysisService.analyzeRide(id);
-                    } catch (Exception e) {
-                        log.error("Uncaught error analyzing ride {}", id, e);
-                        rideRepository.updateStatus(id, Status.ERROR);
-                        result = Status.ERROR;
-                    }
-                    statusCounts.computeIfAbsent(result, s -> new AtomicInteger()).incrementAndGet();
-                    completedCount.incrementAndGet();
-                }, analysisExecutor))
-                .toList();
+            List<CompletableFuture<Void>> futures = rideIds.stream()
+                    .map(id -> CompletableFuture.runAsync(() -> {
+                        Status result;
+                        try {
+                            result = detourAnalysisService.analyzeRide(id);
+                        } catch (Exception e) {
+                            log.error("Uncaught error analyzing ride {}", id, e);
+                            rideRepository.updateStatus(id, Status.ERROR);
+                            result = Status.ERROR;
+                        }
+                        statusCounts.computeIfAbsent(result, s -> new AtomicInteger()).incrementAndGet();
+                        completedCount.incrementAndGet();
+                    }, analysisExecutor))
+                    .toList();
 
-        awaitWithProgressLogging(
-                CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)),
-                completedCount, statusCounts, rideIds.size(), runStart);
+            awaitWithProgressLogging(
+                    CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)),
+                    completedCount, statusCounts, rideIds.size(), runStart);
 
-        Duration totalDuration = Duration.between(runStart, Instant.now());
-        double ridesPerSec = completedCount.get() / Math.max(totalDuration.toMillis() / 1000.0, 0.001);
-        long pendingAfterBatch = rideRepository.countByStatus(Status.PENDING);
-        log.info("=== Detour analysis batch finished: {} processed, {} skipped, {} errors "
-                        + "in {} ({} rides/sec) | {} rides pending ===",
-                count(statusCounts, Status.PROCESSED),
-                count(statusCounts, Status.SKIPPED),
-                count(statusCounts, Status.ERROR),
-                formatDuration(totalDuration),
-                String.format("%.1f", ridesPerSec),
-                pendingAfterBatch);
+            Duration totalDuration = Duration.between(runStart, Instant.now());
+            double ridesPerSec = completedCount.get() / Math.max(totalDuration.toMillis() / 1000.0, 0.001);
+            long pendingAfterBatch = rideRepository.countByStatus(Status.PENDING);
+            log.info("=== Detour analysis batch finished: {} processed, {} skipped, {} errors "
+                            + "in {} ({} rides/sec) | {} rides pending ===",
+                    count(statusCounts, Status.PROCESSED),
+                    count(statusCounts, Status.SKIPPED),
+                    count(statusCounts, Status.ERROR),
+                    formatDuration(totalDuration),
+                    String.format("%.1f", ridesPerSec),
+                    pendingAfterBatch);
 
-        if (completedCount.get() > 0) {
-            tileBuildService.markDataChanged();
+            if (completedCount.get() > 0) {
+                tileBuildService.markDataChanged();
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
@@ -9,12 +10,15 @@ import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.RouteComparisonSummaryDto;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -25,7 +29,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ApiAnalyticsServiceTest {
@@ -60,6 +66,56 @@ class ApiAnalyticsServiceTest {
         assertThat(result.routeComparisonTypeCounts().get("LOCAL_DETOUR")).isEqualTo(4L);
         assertThat(result.routeComparisonTypeCounts()).containsKeys(
                 "EQUIVALENT_ROUTE", "LOCAL_DETOUR", "CORRIDOR_ALTERNATIVE");
+    }
+
+    @Test
+    void routeComparisonSummaryFiltersRidesAndIncludesZeroCountTypes() {
+        when(rideRepository.countRouteComparisonTypes(1000L, 2000L, RideIntent.COMMUTE))
+                .thenReturn(List.<Object[]>of(
+                        new Object[]{RouteComparisonType.EQUIVALENT_ROUTE, 8L},
+                        new Object[]{RouteComparisonType.LOCAL_DETOUR, 4L}));
+        when(rideRepository.findDetourImpactStats(1000L, 2000L, "COMMUTE"))
+                .thenReturn(List.<Object[]>of(
+                        new Object[]{"LOCAL_DETOUR", 4L, 11.25, 14.5, 19.75},
+                        new Object[]{"CORRIDOR_ALTERNATIVE", 3L, 8.0, 17.0, 31.0}));
+
+        RouteComparisonSummaryDto result = service.getRouteComparisonSummary(
+                1000L, 2000L, RideIntent.COMMUTE);
+
+        assertThat(result.classifiedRideCount()).isEqualTo(12L);
+        assertThat(result.routeComparisonTypeCounts()).containsEntry("EQUIVALENT_ROUTE", 8L);
+        assertThat(result.routeComparisonTypeCounts()).containsEntry("LOCAL_DETOUR", 4L);
+        assertThat(result.routeComparisonTypeCounts()).containsEntry("CORRIDOR_ALTERNATIVE", 0L);
+        assertThat(result.detourImpact()).containsExactly(
+                new DetourImpactDto(RouteComparisonType.LOCAL_DETOUR, 4L, 11.25, 14.5, 19.75),
+                new DetourImpactDto(RouteComparisonType.CORRIDOR_ALTERNATIVE, 3L, 8.0, 17.0, 31.0));
+        verify(rideRepository).countRouteComparisonTypes(
+                eq(1000L), eq(2000L), eq(RideIntent.COMMUTE));
+        verify(rideRepository).findDetourImpactStats(eq(1000L), eq(2000L), eq("COMMUTE"));
+    }
+
+    @Test
+    void routeComparisonSummaryRejectsAnInvalidDateRange() {
+        assertThatThrownBy(() -> service.getRouteComparisonSummary(2000L, 1000L, null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void detourImpactQueryUsesPercentilesFormulaAndEligibilityFilters() throws NoSuchMethodException {
+        org.springframework.data.jpa.repository.Query query = RideRepository.class
+                .getMethod("findDetourImpactStats", long.class, long.class, String.class)
+                .getAnnotation(org.springframework.data.jpa.repository.Query.class);
+
+        assertThat(query.nativeQuery()).isTrue();
+        assertThat(query.value())
+                .contains("PERCENTILE_CONT(0.25)", "PERCENTILE_CONT(0.50)", "PERCENTILE_CONT(0.75)")
+                .contains("((actual_distance - shortest_path_distance) / shortest_path_distance) * 100.0")
+                .contains("actual_distance IS NOT NULL", "shortest_path_distance IS NOT NULL")
+                .contains("shortest_path_distance > 0", "start_time >= :from", "start_time <= :to")
+                .contains("ride_intent = CAST(:rideIntent AS varchar)")
+                .contains("'LOCAL_DETOUR', 'CORRIDOR_ALTERNATIVE'")
+                .doesNotContain("'EQUIVALENT_ROUTE'");
     }
 
     @Test

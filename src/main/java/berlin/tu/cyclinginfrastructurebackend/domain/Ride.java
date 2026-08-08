@@ -81,7 +81,10 @@ public class Ride {
     @CollectionTable(
             name = "ride_shortest_path_edges",
             joinColumns = @JoinColumn(name = "ride_id"),
-            indexes = @Index(name = "idx_shortest_path_edge_id", columnList = "edge_id")
+            indexes = {
+                    @Index(name = "idx_shortest_path_edge_id", columnList = "edge_id"),
+                    @Index(name = "idx_ride_shortest_path_edges_ride_id", columnList = "ride_id")
+            }
     )
     @Column(name = "edge_id")
     private List<Integer> shortestPathEdgeIds = new ArrayList<>();

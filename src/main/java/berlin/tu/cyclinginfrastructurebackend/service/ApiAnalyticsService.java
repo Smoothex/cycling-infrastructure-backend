@@ -13,10 +13,12 @@ import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.PipelineStatusDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.RouteComparisonSummaryDto;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.springframework.http.HttpStatus;
@@ -91,6 +93,41 @@ public class ApiAnalyticsService {
                 enrichmentStatusCounts(segmentEventRepository::countByOhsomeProcessingStatus),
                 enrichmentStatusCounts(segmentEventRepository::countByTrafficProcessingStatus)
         );
+    }
+
+    public RouteComparisonSummaryDto getRouteComparisonSummary(Long from, Long to, RideIntent rideIntent) {
+        validateRange(from, to);
+
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (RouteComparisonType type : RouteComparisonType.values()) {
+            counts.put(type.name(), 0L);
+        }
+
+        for (Object[] row : rideRepository.countRouteComparisonTypes(
+                lowerBound(from), upperBound(to), rideIntent)) {
+            if (row[0] instanceof RouteComparisonType type) {
+                counts.put(type.name(), asLong(row[1]));
+            }
+        }
+
+        long classifiedRideCount = counts.values().stream().mapToLong(Long::longValue).sum();
+        List<DetourImpactDto> detourImpact = rideRepository.findDetourImpactStats(
+                        lowerBound(from),
+                        upperBound(to),
+                        rideIntent != null ? rideIntent.name() : null)
+                .stream()
+                .map(this::toDetourImpact)
+                .toList();
+        return new RouteComparisonSummaryDto(classifiedRideCount, counts, detourImpact);
+    }
+
+    private DetourImpactDto toDetourImpact(Object[] row) {
+        return new DetourImpactDto(
+                RouteComparisonType.valueOf(stringValue(row[0])),
+                asLong(row[1]),
+                asDouble(row[2]),
+                asDouble(row[3]),
+                asDouble(row[4]));
     }
 
     private Map<String, Long> rideStatusCounts() {

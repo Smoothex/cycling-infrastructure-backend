@@ -16,6 +16,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +25,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
@@ -58,6 +62,10 @@ public class TileBuildService {
     private final String tippecanoeBinary;
     private final String tileJoinBinary;
     private final long buildTimeoutMinutes;
+    private final PipelineActivityTracker pipelineActivityTracker;
+    private final boolean autoRebuildEnabled;
+    private final Duration autoRebuildQuietPeriod;
+    private final Clock clock;
 
     // tippecanoe/tile-join redraw these in place with \r rather than emitting a new
     // line; BufferedReader.lines() splits on \r too, so each redraw would otherwise
@@ -79,10 +87,9 @@ public class TileBuildService {
     );
 
     private final AtomicBoolean running = new AtomicBoolean(false);
-    // set by the analysis/enrichment pipelines whenever they change tile-relevant data;
-    // consumed by the scheduled auto-rebuild so tiles never go stale by more than one
-    // check interval
-    private final AtomicBoolean dataChanged = new AtomicBoolean(false);
+    private final AtomicLong dataVersion = new AtomicLong();
+    private final AtomicLong builtVersion = new AtomicLong();
+    private final AtomicReference<Instant> lastDataChangedAt = new AtomicReference<>();
     private final ExecutorService buildExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "tile-build");
         thread.setDaemon(true);
@@ -93,15 +100,36 @@ public class TileBuildService {
     private volatile String lastError;
 
     public TileBuildService(TileExportRepository tileExportRepository,
+                            PipelineActivityTracker pipelineActivityTracker,
                             @Value("${tiles.directory}") String tilesDirectory,
                             @Value("${tiles.tippecanoe-binary}") String tippecanoeBinary,
                             @Value("${tiles.tile-join-binary:tile-join}") String tileJoinBinary,
-                            @Value("${tiles.build-timeout-minutes}") long buildTimeoutMinutes) {
+                            @Value("${tiles.build-timeout-minutes}") long buildTimeoutMinutes,
+                            @Value("${tiles.auto-rebuild.enabled:true}") boolean autoRebuildEnabled,
+                            @Value("${tiles.auto-rebuild.quiet-period-ms:900000}") long autoRebuildQuietPeriodMs) {
+        this(tileExportRepository, pipelineActivityTracker, tilesDirectory, tippecanoeBinary,
+                tileJoinBinary, buildTimeoutMinutes, autoRebuildEnabled, autoRebuildQuietPeriodMs,
+                Clock.systemUTC());
+    }
+
+    TileBuildService(TileExportRepository tileExportRepository,
+                     PipelineActivityTracker pipelineActivityTracker,
+                     String tilesDirectory,
+                     String tippecanoeBinary,
+                     String tileJoinBinary,
+                     long buildTimeoutMinutes,
+                     boolean autoRebuildEnabled,
+                     long autoRebuildQuietPeriodMs,
+                     Clock clock) {
         this.tileExportRepository = tileExportRepository;
+        this.pipelineActivityTracker = pipelineActivityTracker;
         this.tilesDirectory = Path.of(tilesDirectory);
         this.tippecanoeBinary = tippecanoeBinary;
         this.tileJoinBinary = tileJoinBinary;
         this.buildTimeoutMinutes = buildTimeoutMinutes;
+        this.autoRebuildEnabled = autoRebuildEnabled;
+        this.autoRebuildQuietPeriod = Duration.ofMillis(Math.max(0, autoRebuildQuietPeriodMs));
+        this.clock = clock;
         initLastGeneratedAtFromExistingFile();
     }
 
@@ -113,10 +141,14 @@ public class TileBuildService {
      * @return false if a build is already in flight
      */
     public boolean triggerRebuild() {
+        return triggerRebuild(dataVersion.get());
+    }
+
+    private boolean triggerRebuild(long targetVersion) {
         if (!running.compareAndSet(false, true)) {
             return false;
         }
-        buildExecutor.submit(this::runBuild);
+        buildExecutor.submit(() -> runBuild(targetVersion));
         return true;
     }
 
@@ -125,27 +157,45 @@ public class TileBuildService {
      * Called by the pipelines after they change segment counts or enrichment data.
      */
     public void markDataChanged() {
-        dataChanged.set(true);
+        Instant changedAt = clock.instant();
+        lastDataChangedAt.accumulateAndGet(changedAt,
+                (current, candidate) -> current == null || candidate.isAfter(current) ? candidate : current);
+        dataVersion.incrementAndGet();
     }
 
     /**
-     * Rebuilds at most once per check interval and only when data actually changed.
-     * A change arriving while a build is running stays flagged (the export snapshot
-     * predates it) and is picked up by the next pass.
+     * Rebuilds only after all tracked pipeline work has been idle for the configured quiet period.
+     * Version tracking keeps changes that arrive during a build pending for the next pass.
      */
     @Scheduled(fixedDelayString = "${tiles.auto-rebuild-check-ms:300000}")
     void rebuildIfDataChanged() {
-        if (!dataChanged.get() || running.get()) {
+        Instant now = clock.instant();
+        if (!isAutoRebuildDue(now)) {
             return;
         }
-        dataChanged.set(false);
-        if (triggerRebuild()) {
-            log.info("Auto-triggered tile rebuild after pipeline data changes");
-        } else {
-            // lost the race against a concurrent manual trigger; keep the flag so the
-            // change still lands in a rebuild that started after it
-            dataChanged.set(true);
+        long targetVersion = dataVersion.get();
+        if (triggerRebuild(targetVersion)) {
+            log.info("Auto-triggered tile rebuild after {} ms of pipeline inactivity",
+                    autoRebuildQuietPeriod.toMillis());
         }
+    }
+
+    boolean isAutoRebuildDue(Instant now) {
+        if (!autoRebuildEnabled
+                || dataVersion.get() <= builtVersion.get()
+                || running.get()
+                || pipelineActivityTracker.isActive()) {
+            return false;
+        }
+
+        Instant dataChangedAt = lastDataChangedAt.get();
+        if (dataChangedAt == null) {
+            return false;
+        }
+        Instant quietSince = dataChangedAt.isAfter(pipelineActivityTracker.idleSince())
+                ? dataChangedAt
+                : pipelineActivityTracker.idleSince();
+        return !now.isBefore(quietSince.plus(autoRebuildQuietPeriod));
     }
 
     public TileStatusDto getStatus() {
@@ -159,7 +209,7 @@ public class TileBuildService {
         );
     }
 
-    private void runBuild() {
+    private void runBuild(long targetVersion) {
         Path workDirectory = tilesDirectory.resolve("work");
         Path segmentsFile = workDirectory.resolve("segments.geojsonl");
         Path streetsBuild = workDirectory.resolve("streets-build.pmtiles");
@@ -181,8 +231,9 @@ public class TileBuildService {
             Files.move(outputFile, tileFilePath(),
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 
-            lastGeneratedAt = Instant.now();
+            lastGeneratedAt = clock.instant();
             lastError = null;
+            builtVersion.accumulateAndGet(targetVersion, Math::max);
             log.info("Tile build finished in {} ms -> {}", System.currentTimeMillis() - start, tileFilePath());
         } catch (Exception e) {
             lastError = e.getMessage();
@@ -290,8 +341,8 @@ public class TileBuildService {
             if (Files.exists(file)) {
                 lastGeneratedAt = Files.getLastModifiedTime(file).toInstant();
             } else {
-                // no tileset yet: let the scheduled check build the first one
-                dataChanged.set(true);
+                // No tileset yet: schedule the first build after the normal idle period.
+                markDataChanged();
             }
         } catch (IOException e) {
             log.warn("Could not read existing tile file timestamp", e);
