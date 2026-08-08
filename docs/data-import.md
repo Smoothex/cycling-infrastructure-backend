@@ -80,10 +80,13 @@ Before map matching, two checks run:
    - **Edge IDs** — the GraphHopper edge IDs of all traversed segments
    - **Bearings** — compass direction (0–360°) per edge, computed from the edge geometry in traversal direction
    - **Timestamps** — epoch ms per edge, estimated by finding the GPS point closest to the edge midpoint
-5. `StreetSegmentService.recordUsage()` increments `usage_count` on each traversed `StreetSegment`, creating the segment record if it does not yet exist
+5. `StreetSegmentService.recordUsage()` groups repeated edge traversals into occurrence counts and updates every traversed `StreetSegment` with one ordered SQL statement per ride, creating missing segment records first
 6. The ride is saved to the database with `status=PENDING`, making it eligible for detour analysis
 
 If map matching throws (e.g. no path found, too few points), the file is counted as failed and the ride is not saved.
+
+The batch summary reports separate total, average, and maximum durations for parsing, total ride
+processing, GraphHopper, edge timestamp calculation, segment updates, and ride persistence.
 
 ### Step 5 — Parallel Execution
 

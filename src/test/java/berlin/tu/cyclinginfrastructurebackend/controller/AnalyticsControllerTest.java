@@ -1,5 +1,7 @@
 package berlin.tu.cyclinginfrastructurebackend.controller;
 
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
+import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.service.ApiAnalyticsService;
 import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
@@ -8,8 +10,10 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorGeometryDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.RouteComparisonSummaryDto;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -62,6 +66,34 @@ class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.matchingEventCount").value(300));
 
         verify(analyticsService).getAnalyticsContext(eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void routeComparisonsReturnFilterAwareRideCounts() throws Exception {
+        when(analyticsService.getRouteComparisonSummary(any(), any(), any())).thenReturn(
+                new RouteComparisonSummaryDto(12L, Map.of(
+                        "EQUIVALENT_ROUTE", 8L,
+                        "LOCAL_DETOUR", 4L,
+                        "CORRIDOR_ALTERNATIVE", 0L),
+                        List.of(new DetourImpactDto(
+                                RouteComparisonType.LOCAL_DETOUR, 4L, 11.25, 14.5, 19.75))));
+
+        mockMvc.perform(get("/api/analytics/route-comparisons")
+                        .param("from", "1000")
+                        .param("to", "2000")
+                        .param("rideIntent", "COMMUTE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classifiedRideCount").value(12))
+                .andExpect(jsonPath("$.routeComparisonTypeCounts.EQUIVALENT_ROUTE").value(8))
+                .andExpect(jsonPath("$.routeComparisonTypeCounts.CORRIDOR_ALTERNATIVE").value(0))
+                .andExpect(jsonPath("$.detourImpact[0].routeComparisonType").value("LOCAL_DETOUR"))
+                .andExpect(jsonPath("$.detourImpact[0].eligibleRideCount").value(4))
+                .andExpect(jsonPath("$.detourImpact[0].lowerQuartilePercent").value(11.25))
+                .andExpect(jsonPath("$.detourImpact[0].medianPercent").value(14.5))
+                .andExpect(jsonPath("$.detourImpact[0].upperQuartilePercent").value(19.75));
+
+        verify(analyticsService).getRouteComparisonSummary(
+                eq(1000L), eq(2000L), eq(RideIntent.COMMUTE));
     }
 
     @Test

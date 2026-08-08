@@ -3,6 +3,9 @@ package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.SimRa;
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.MapMatchingService;
+import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
+import berlin.tu.cyclinginfrastructurebackend.service.RideProcessingResult;
+import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import berlin.tu.cyclinginfrastructurebackend.util.ImportMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +32,8 @@ public class SimRaDataLoader {
     private final RideRepository rideRepository;
     private final SimRaFileParser parser;
     private final MapMatchingService mapMatchingService;
+    private final PipelineActivityTracker pipelineActivityTracker;
+    private final TileBuildService tileBuildService;
     private final Set<String> attemptedFilesThisRun = ConcurrentHashMap.newKeySet();
 
     @Value("${simra.data.path:./data/SimRa}")
@@ -48,10 +53,14 @@ public class SimRaDataLoader {
 
     public SimRaDataLoader(RideRepository rideRepository,
                            SimRaFileParser parser,
-                           MapMatchingService mapMatchingService) {
+                           MapMatchingService mapMatchingService,
+                           PipelineActivityTracker pipelineActivityTracker,
+                           TileBuildService tileBuildService) {
         this.rideRepository = rideRepository;
         this.parser = parser;
         this.mapMatchingService = mapMatchingService;
+        this.pipelineActivityTracker = pipelineActivityTracker;
+        this.tileBuildService = tileBuildService;
     }
 
     @Scheduled(fixedDelayString = "${pipeline.import.delay-ms:30000}")
@@ -92,35 +101,40 @@ public class SimRaDataLoader {
             return;
         }
 
-        log.info("Starting SimRa import batch with {} files from {}.", filesToProcess.size(), dataPath);
-        ImportMetrics metrics = new ImportMetrics();
-        int total = filesToProcess.size();
+        try (PipelineActivityTracker.Activity ignored = pipelineActivityTracker.beginWork()) {
+            log.info("Starting SimRa import batch with {} files from {}.", filesToProcess.size(), dataPath);
+            ImportMetrics metrics = new ImportMetrics();
+            int total = filesToProcess.size();
 
-        int threadCount = Math.max(1, importThreadPoolSize);
+            int threadCount = Math.max(1, importThreadPoolSize);
 
-        try (ForkJoinPool customThreadPool = new ForkJoinPool(threadCount)) {
-            customThreadPool.submit(() ->
-                    filesToProcess.parallelStream().forEach(path -> {
-                        try {
-                            processFile(path, metrics);
-                            int current = metrics.getFilesProcessed();
-                            if (current > 0 && current % 100 == 0) {
-                                log.info("Imported {}/{} rides...", current, total);
+            try (ForkJoinPool customThreadPool = new ForkJoinPool(threadCount)) {
+                customThreadPool.submit(() ->
+                        filesToProcess.parallelStream().forEach(path -> {
+                            try {
+                                processFile(path, metrics);
+                                int current = metrics.getFilesProcessed();
+                                if (current > 0 && current % 100 == 0) {
+                                    log.info("Imported {}/{} rides...", current, total);
+                                }
+                            } catch (Exception e) {
+                                metrics.recordFileFailed();
+                                log.error("Failed to process file: {}", path.getFileName(), e);
+                            } finally {
+                                attemptedFilesThisRun.add(path.getFileName().toString());
                             }
-                        } catch (Exception e) {
-                            metrics.recordFileFailed();
-                            log.error("Failed to process file: {}", path.getFileName(), e);
-                        } finally {
-                            attemptedFilesThisRun.add(path.getFileName().toString());
-                        }
-                    })
-            ).get();
-        } catch (Exception e) {
-            log.error("Error during import execution", e);
-        }
+                        })
+                ).get();
+            } catch (Exception e) {
+                log.error("Error during import execution", e);
+            }
 
-        metrics.finish();
-        metrics.printSummary();
+            metrics.finish();
+            metrics.printSummary();
+            if (metrics.hasSegmentUpdates()) {
+                tileBuildService.markDataChanged();
+            }
+        }
     }
 
     private void processFile(Path path, ImportMetrics metrics) {
@@ -153,12 +167,11 @@ public class SimRaDataLoader {
                 return;
             }
 
-            // 2. Map Match & Persist
-            long processingStart = System.nanoTime();
-            boolean success = mapMatchingService.processRide(ride);
-            metrics.recordMapMatch(System.nanoTime() - processingStart, success);
+            // 2. Map match, update segment usage, and persist
+            RideProcessingResult result = mapMatchingService.processRide(ride);
+            metrics.recordProcessing(result);
 
-            if (success) {
+            if (result.success()) {
                 metrics.recordFileProcessed();
             } else {
                 metrics.recordFileFailed();

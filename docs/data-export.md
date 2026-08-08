@@ -463,6 +463,19 @@ Compares historical OSM infrastructure categories with the filtered avoidance-si
 **`POST /api/admin/tiles/rebuild`**  
 Triggers a tile rebuild asynchronously. Returns `202 Accepted` if started, `409 Conflict` if a build is already in progress.
 
+Automatic rebuilds are debounced independently from this endpoint. Import, detour-analysis, and
+enrichment batches mark tile data stale and register themselves as active pipeline work. The tile
+builder waits until all such work has stopped and the configured quiet period has elapsed, then
+builds once for all accumulated changes. Changes made during a build remain pending for a later
+build, and a failed build remains pending for retry. Manual rebuilds ignore the automatic-build and
+quiet-period settings but retain the single-build-at-a-time guard.
+
+| Property | Default | Description |
+|---|---:|---|
+| `tiles.auto-rebuild.enabled` | `true` | Enables scheduled automatic rebuilding |
+| `tiles.auto-rebuild.quiet-period-ms` | `900000` | Pipeline idle time required before rebuilding |
+| `tiles.auto-rebuild-check-ms` | `300000` | Interval between rebuild eligibility checks |
+
 **`GET /api/tiles/status`**  
 Returns the current tile build state (`IDLE`, `RUNNING`, `FAILED`), the timestamp of the last successful build, and the last error message if any.
 

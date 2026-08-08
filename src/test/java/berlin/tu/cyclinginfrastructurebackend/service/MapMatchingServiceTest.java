@@ -29,9 +29,13 @@ class MapMatchingServiceTest {
         ride.getRidePoints().add(point(52.5200, 13.4050, 1_000L));
         ride.getRidePoints().add(point(52.5205, 13.4055, 2_000L));
 
-        boolean processed = service.processRide(ride);
+        RideProcessingResult result = service.processRide(ride);
 
-        assertThat(processed).isTrue();
+        assertThat(result.success()).isTrue();
+        assertThat(result.ridePersistenceNanos()).isPositive();
+        assertThat(result.graphHopperNanos()).isZero();
+        assertThat(result.timestampCalculationNanos()).isZero();
+        assertThat(result.segmentUpdateNanos()).isZero();
         assertThat(ride.getStatus()).isEqualTo(Status.SKIPPED);
         verify(rideRepository).save(same(ride));
         verifyNoInteractions(graphHopperService, streetSegmentService);

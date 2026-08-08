@@ -15,6 +15,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.PipelineStatusDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.ProcessingSummaryDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.RouteComparisonSummaryDto;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -50,6 +51,15 @@ public class AnalyticsController {
     @GetMapping("/pipeline-status")
     public PipelineStatusDto getPipelineStatus() {
         return analyticsService.getPipelineStatus();
+    }
+
+    @GetMapping("/route-comparisons")
+    public RouteComparisonSummaryDto getRouteComparisons(
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(required = false) RideIntent rideIntent) {
+
+        return analyticsService.getRouteComparisonSummary(from, to, rideIntent);
     }
 
     @GetMapping("/distribution")

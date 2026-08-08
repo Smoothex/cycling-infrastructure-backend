@@ -49,48 +49,101 @@ public class MapMatchingService {
         this.minimumOriginDestinationDistanceMeters = minimumOriginDestinationDistanceMeters;
     }
 
-    public boolean processRide(Ride ride) {
-        List<RidePoint> validPoints = filterAndSortPoints(ride);
-        if (validPoints.size() < 2) return false;
-
-        double originDestinationDistanceMeters = calculateOriginDestinationDistanceMeters(validPoints);
-        if (originDestinationDistanceMeters < minimumOriginDestinationDistanceMeters) {
-            log.debug(
-                    "Skipping ride {}: origin-destination distance {} m is below the minimum of {} m",
-                    ride.getId(), originDestinationDistanceMeters, minimumOriginDestinationDistanceMeters);
-            ride.setStatus(Status.SKIPPED);
-            rideRepository.save(ride);
-            return true;
-        }
-
+    public RideProcessingResult processRide(Ride ride) {
+        long totalStartedAt = System.nanoTime();
+        long graphHopperNanos = 0;
+        long timestampCalculationNanos = 0;
+        long segmentUpdateNanos = 0;
+        long ridePersistenceNanos = 0;
         try {
+            List<RidePoint> validPoints = filterAndSortPoints(ride);
+            if (validPoints.size() < 2) {
+                return result(false, totalStartedAt, graphHopperNanos, timestampCalculationNanos,
+                        segmentUpdateNanos, ridePersistenceNanos);
+            }
+
+            double originDestinationDistanceMeters = calculateOriginDestinationDistanceMeters(validPoints);
+            if (originDestinationDistanceMeters < minimumOriginDestinationDistanceMeters) {
+                log.debug(
+                        "Skipping ride {}: origin-destination distance {} m is below the minimum of {} m",
+                        ride.getId(), originDestinationDistanceMeters, minimumOriginDestinationDistanceMeters);
+                ride.setStatus(Status.SKIPPED);
+                long persistenceStartedAt = System.nanoTime();
+                try {
+                    rideRepository.save(ride);
+                } finally {
+                    ridePersistenceNanos = System.nanoTime() - persistenceStartedAt;
+                }
+                return result(true, totalStartedAt, graphHopperNanos, timestampCalculationNanos,
+                        segmentUpdateNanos, ridePersistenceNanos);
+            }
+
             List<Observation> observations = validPoints.stream()
                     .map(p -> new Observation(new GHPoint(p.getLocation().getY(), p.getLocation().getX())))
                     .collect(Collectors.toList());
 
-            MatchResult result = hopperService.match(observations);
-            ride.setActualDistance(result.getMatchLength());
-            updateRideTrajectory(ride, result);
+            MatchResult matchResult;
+            long graphHopperStartedAt = System.nanoTime();
+            try {
+                matchResult = hopperService.match(observations);
+            } finally {
+                graphHopperNanos = System.nanoTime() - graphHopperStartedAt;
+            }
+            ride.setActualDistance(matchResult.getMatchLength());
+            updateRideTrajectory(ride, matchResult);
 
             // Extract edge IDs
-            List<EdgeMatch> edgeMatches = result.getEdgeMatches();
+            List<EdgeMatch> edgeMatches = matchResult.getEdgeMatches();
             List<EdgeIteratorState> edges = edgeMatches.stream()
                     .map(EdgeMatch::getEdgeState)
                     .collect(Collectors.toList());
 
             ride.setTraversedEdgeIds(edges.stream().map(EdgeIteratorState::getEdge).collect(Collectors.toList()));
             ride.setTraversedEdgeBearings(computeEdgeBearings(edgeMatches));
-            ride.setTraversedEdgeTimestamps(computeEdgeTimestamps(edgeMatches, validPoints));
+            long timestampStartedAt = System.nanoTime();
+            try {
+                ride.setTraversedEdgeTimestamps(computeEdgeTimestamps(edgeMatches, validPoints));
+            } finally {
+                timestampCalculationNanos = System.nanoTime() - timestampStartedAt;
+            }
 
-            segmentService.recordUsage(edges, hopperService);
+            long segmentUpdateStartedAt = System.nanoTime();
+            try {
+                segmentService.recordUsage(edges, hopperService);
+            } finally {
+                segmentUpdateNanos = System.nanoTime() - segmentUpdateStartedAt;
+            }
 
             ride.setStatus(Status.PENDING);
-            rideRepository.save(ride);
-            return true;
+            long persistenceStartedAt = System.nanoTime();
+            try {
+                rideRepository.save(ride);
+            } finally {
+                ridePersistenceNanos = System.nanoTime() - persistenceStartedAt;
+            }
+            return result(true, totalStartedAt, graphHopperNanos, timestampCalculationNanos,
+                    segmentUpdateNanos, ridePersistenceNanos);
         } catch (Exception e) {
             log.error("Failed to process ride {}: {}", ride.getId(), e.getMessage());
-            return false;
+            return result(false, totalStartedAt, graphHopperNanos, timestampCalculationNanos,
+                    segmentUpdateNanos, ridePersistenceNanos);
         }
+    }
+
+    private RideProcessingResult result(boolean success,
+                                        long totalStartedAt,
+                                        long graphHopperNanos,
+                                        long timestampCalculationNanos,
+                                        long segmentUpdateNanos,
+                                        long ridePersistenceNanos) {
+        return new RideProcessingResult(
+                success,
+                System.nanoTime() - totalStartedAt,
+                graphHopperNanos,
+                timestampCalculationNanos,
+                segmentUpdateNanos,
+                ridePersistenceNanos
+        );
     }
 
     private void updateRideTrajectory(Ride ride, MatchResult result) {

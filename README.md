@@ -25,6 +25,31 @@ docker network create simra_simra-network
 docker compose up -d
 ```
 
+The base configuration is durable and keeps PostgreSQL's recyclable WAL working set near a
+2 GB soft target. `archive_mode` is off and the development setup has no replication slots, so
+old WAL files are recycled after checkpoints rather than retained as history.
+
+### Non-durable bulk-import database mode
+
+For a database that can be recreated entirely from the source ride files, an opt-in profile
+disables PostgreSQL crash durability:
+
+```bash
+docker compose -f compose.yaml -f compose.bulk-import.yaml up -d postgres
+```
+
+This runs with `fsync=off`, `full_page_writes=off`, and `synchronous_commit=off`. It still
+generates WAL for normal inserts and updates, but avoids forcing it to durable storage. A host,
+Docker, or PostgreSQL crash can leave the database corrupt; recreate and re-import it rather
+than trusting crash recovery.
+
+Switch back to durable mode after a clean shutdown with:
+
+```bash
+docker compose -f compose.yaml stop postgres
+docker compose -f compose.yaml up -d postgres
+```
+
 ### Run the backend locally
 ```bash
 ./gradlew bootRun
@@ -76,6 +101,8 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
 | `pipeline.enrichment.ohsome.enabled` | `true` | Enable Ohsome OSM enrichment (rate-limited) |
 | `pipeline.enrichment.berlin-open-data.enabled` | `true` | Enable VIZ Berlin road-closure enrichment |
+| `tiles.auto-rebuild.enabled` | `true` | Automatically rebuild stale tiles after pipeline work becomes idle |
+| `tiles.auto-rebuild.quiet-period-ms` | `900000` | Required pipeline idle time before an automatic tile build |
 
 ## Data Directory Layout
 
