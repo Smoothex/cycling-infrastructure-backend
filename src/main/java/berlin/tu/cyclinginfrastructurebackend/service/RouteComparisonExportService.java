@@ -50,10 +50,8 @@ public class RouteComparisonExportService {
                            (r.actual_distance - r.shortest_path_distance)
                                / NULLIF(r.shortest_path_distance, 0) AS relative_detour_ratio,
                            r.overlap_ratio,
-                           (SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY rp.gps_accuracy)
-                            FROM ride_points rp
-                            WHERE rp.ride_id = r.id AND rp.gps_accuracy IS NOT NULL) AS median_gps_accuracy,
-                           (SELECT COUNT(*) FROM ride_points rp WHERE rp.ride_id = r.id) AS gps_point_count,
+                           r.median_gps_accuracy,
+                           r.gps_point_count,
                            ST_AsText(r.trajectory) AS actual_route_wkt,
                            ST_AsText(r.shortest_path) AS shortest_route_wkt,
                            ROW_NUMBER() OVER (

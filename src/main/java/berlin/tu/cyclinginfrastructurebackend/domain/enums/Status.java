@@ -1,8 +1,8 @@
 package berlin.tu.cyclinginfrastructurebackend.domain.enums;
 
 public enum Status {
-    PENDING,            // Map-matched, waiting for detour analysis
-    ANALYZING,          // Claimed by the detour-analysis worker
+    PENDING,            // Retained for API compatibility; clean imports do not persist it
+    ANALYZING,          // Retained for API compatibility; clean imports do not persist it
     PROCESSED,          // Analyzed successfully
     SKIPPED,            // too short, invalid points, or routing failed
     ERROR

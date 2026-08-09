@@ -38,15 +38,14 @@ public class Ride {
     private PhoneLocation phoneLocation;
 
     @OneToMany(mappedBy = "ride", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<RidePoint> ridePoints = new ArrayList<>();
-
-    @OneToMany(mappedBy = "ride", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Incident> incidents = new ArrayList<>();
 
     private String originalFilename;
 
     private Long startTime;
     private Long endTime;
+    private Long gpsPointCount;
+    private Double medianGpsAccuracy;
 
     @Column(columnDefinition = "geometry(LineString,4326)")
     private LineString trajectory;

@@ -4,7 +4,7 @@
 
 The only data source currently imported is **SimRa** — a community cycling safety app that records GPS trajectories and safety incidents. Raw ride files are picked up from a local directory, parsed, validated, map-matched to the road network, and stored in the database.
 
-Import runs as a scheduled background job. New files are detected automatically on each cycle.
+Import runs in bounded batches during one backend run. It keeps scheduling batches until the source scan is exhausted, then stops scanning until the backend is restarted.
 
 ---
 
@@ -33,7 +33,7 @@ lat,lon,X,Y,Z,timeStamp,acc,a,b,c
 
 **Section 2 — GPS track:**
 - One row per GPS sample with position, accelerometer (X/Y/Z), gyroscope (a/b/c), GPS accuracy, and timestamp (epoch ms)
-- Rows are sorted by timestamp during parsing; a `sequenceIndex` tiebreaker handles duplicate timestamps
+- Sensor columns remain accepted, but only location, timestamp, point count, and the GPS-accuracy median are used by the backend
 
 ---
 
@@ -41,7 +41,7 @@ lat,lon,X,Y,Z,timeStamp,acc,a,b,c
 
 ### Step 1 — File Discovery
 
-Every 30 seconds (configurable via `pipeline.import.delay-ms`), the loader scans the SimRa data path recursively for files that:
+The loader scans the SimRa data path recursively for files that:
 - Are in a `Rides/` directory
 - Have filenames starting with `VM`
 - Have not already been imported (checked against `rides.original_filename`)
@@ -49,18 +49,23 @@ Every 30 seconds (configurable via `pipeline.import.delay-ms`), the loader scans
 
 Up to `pipeline.import.batch-size` (default: 100) files are processed per cycle.
 
+If a scan returns fewer files than the batch limit, the source tree was exhausted and the importer stops immediately after that final batch completes. If a scan returns exactly the limit, another scan determines whether another batch remains. Once complete, later scheduled callbacks return without querying the database or walking the source volume. A backend restart starts a new import run, allowing newly added files and previously failed files to be considered again.
+
 ### Step 2 — Parsing
 
-`SimRaFileParser` reads the file and produces a `Ride` object:
+`SimRaFileParser` reads the file and produces a `ParsedRide`: a persistent `Ride` aggregate plus a transient list of `RideTracePoint` values.
 
 1. Splits the stream on the `======` separator
 2. Finds the header row in each section (starts with `key,` or `lat,`)
 3. Pads short rows to match the header column count (some SimRa versions omit trailing fields)
 4. Parses both sections via OpenCSV bean mapping
 5. Extracts ride metadata (bike type, etc.) from the first incident row
-6. Builds `RidePoint` objects with JTS `Point` geometries (SRID 4326)
+6. Builds an in-memory trace containing only JTS `Point` geometries (SRID 4326) and timestamps
 7. Builds `Incident` objects with participant sets
 8. Sets `startTime` / `endTime` from the first and last point timestamps
+9. Stores the number of parsed GPS rows and the median of non-null GPS accuracies on `Ride`
+
+The raw trace is not attached to the JPA aggregate and is never persisted. The original source order still determines `startTime`, `endTime`, and the initial trajectory, matching the previous parser behavior. Before validation and map matching, valid locations with timestamps are sorted chronologically once; that same canonical list is reused for map matching, edge timestamps, shortest-path endpoints, and detour timestamps.
 
 ### Step 3 — Validation
 
@@ -76,17 +81,28 @@ Before map matching, two checks run:
 1. GPS points are converted to `Observation` objects and passed to GraphHopper
 2. GraphHopper returns a sequence of `EdgeMatch` objects — one per road segment traversed
 3. The snapped coordinates are assembled into a new `LineString` (the cleaned `trajectory`)
-4. Per-edge data is computed and stored:
+4. Per-edge data is prepared on the in-memory ride:
    - **Edge IDs** — the GraphHopper edge IDs of all traversed segments
    - **Bearings** — compass direction (0–360°) per edge, computed from the edge geometry in traversal direction
    - **Timestamps** — epoch ms per edge, estimated by finding the GPS point closest to the edge midpoint
-5. `StreetSegmentService.recordUsage()` groups repeated edge traversals into occurrence counts and updates every traversed `StreetSegment` with one ordered SQL statement per ride, creating missing segment records first
-6. The ride is saved to the database with `status=PENDING`, making it eligible for detour analysis
+5. Repeated edge traversals are grouped into occurrence-count usage deltas; missing zero-count `StreetSegment` reference rows are created in short independent transactions
+6. Shortest-path and detour analysis runs immediately using the same canonical trace
+7. A final transaction flushes the finalized `Ride`, locks the union of usage/avoidance/preference segment IDs in ascending order, applies all counters, and saves segment events
 
-If map matching throws (e.g. no path found, too few points), the file is counted as failed and the ride is not saved.
+Rides below the configured origin-destination distance are finalized as `SKIPPED` without usage. If shortest-path routing fails after successful map matching, the ride is finalized as `SKIPPED` while retaining prepared usage. If map matching, detour preparation, or final persistence throws, no ride, counter, or event state is committed; an unused zero-count segment reference may remain. The source file is suppressed for the rest of the current backend run and becomes eligible again after restart because its filename was not committed.
 
-The batch summary reports separate total, average, and maximum durations for parsing, total ride
-processing, GraphHopper, edge timestamp calculation, segment updates, and ride persistence.
+Metrics accumulate across every batch. After the source is exhausted and all inline detour and final-persistence work has completed, one final structured summary reports:
+
+- Source files selected, attempted, rejected, invalid, and failed
+- Committed rides split into `PROCESSED` and `SKIPPED`
+- Route-comparison and ride-intent classifications, plus imported safety incidents
+- Usage observations and per-ride segment counter updates
+- Total segment events split into `AVOIDANCE` and `PREFERENCE`
+- Map-matching outcomes and success rate
+- Total, average, maximum, and sample count for every processing phase
+- End-to-end duration and committed-ride throughput
+
+A file counts as committed only after the final transaction succeeds. If the final summary reports failures, restarting the backend makes those source files eligible for retry.
 
 ### Step 5 — Parallel Execution
 
@@ -103,6 +119,6 @@ Files within a batch are processed in parallel using a `ForkJoinPool` sized to `
 | `pipeline.enabled` |  Master switch for all pipeline jobs    |
 | `pipeline.import.batch-size` |  Max files per import cycle             |
 | `pipeline.import.thread-pool-size` |  Parallel import threads                |
-| `pipeline.import.delay-ms` |  Polling interval (ms)                  |
+| `pipeline.import.delay-ms` |  Delay between non-final import batches (ms) |
 
 The SimRa directory must contain a `Rides/` subdirectory with files named `VM*`. In Docker, the directory is mounted as a volume (see `compose.yaml`).

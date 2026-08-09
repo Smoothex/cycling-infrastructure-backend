@@ -1,11 +1,5 @@
 # Data Model
 
-## Entity Relationship Overview
-![erd.svg](images/erd.svg)
-
-
----
-
 ## Entities
 
 ### `rides`
@@ -22,6 +16,8 @@ The central entity. One record per imported SimRa ride file.
 | `trailerAttached` | boolean | Trailer attached |
 | `phoneLocation` | enum | `POCKET`, `HANDLEBAR`, `JACKET_POCKET`, `HAND`, `BASKET`, `BAG`, `OTHER` |
 | `startTime` / `endTime` | epoch ms | Ride start and end timestamps |
+| `gpsPointCount` | long | Number of parsed GPS rows in the source file |
+| `medianGpsAccuracy` | double | Continuous median of non-null GPS accuracy values |
 | `trajectory` | LineString (4326) | Map-matched GPS trajectory |
 | `shortestPath` | LineString (4326) | GraphHopper shortest path between start and end |
 | `actualDistance` | double | Distance of the map-matched trajectory in meters |
@@ -33,34 +29,18 @@ The central entity. One record per imported SimRa ride file.
 
 **Ride status lifecycle:**
 
-```
-PENDING → ANALYZING → PROCESSED
-                    → SKIPPED
-                    → ERROR
-```
+Clean imports persist only final statuses:
 
-- `PENDING` — map-matched successfully, waiting for detour analysis
-- `ANALYZING` — claimed by a worker thread
+- `PENDING` / `ANALYZING` — retained enum values for response compatibility; not persisted by the inline import flow
 - `PROCESSED` — route comparison completed successfully; the analytical outcome is stored in `routeComparisonType`
-- `SKIPPED` — too few points, no traversed edges, or routing failed
-- `ERROR` — unhandled exception during analysis
+- `SKIPPED` — too short, no traversed edges, or shortest-path routing failed
+- `ERROR` — retained for response compatibility; an inline failure rolls back instead of persisting this status
 
 ---
 
-### `ride_points`
+### Transient ride trace
 
-Individual GPS samples from the raw SimRa recording.
-
-| Field | Type | Description |
-|---|---|---|
-| `location` | Point (4326) | GPS coordinate |
-| `timestamp` | epoch ms | Sample time |
-| `x`, `y`, `z` | double | Accelerometer axes |
-| `a`, `b`, `c` | double | Gyroscope axes |
-| `gpsAccuracy` | double | GPS accuracy radius in meters |
-| `sequenceIndex` | int | Tiebreaker when timestamps collide |
-
-`ride_id` is indexed - this table holds one row per GPS sample across all rides, so every per-ride lookup (e.g. during detour analysis) relies on that index rather than a full table scan.
+GPS samples are represented during import as `RideTracePoint(location, timestamp)` values. The same chronologically sorted valid list is passed through map matching and detour analysis, then discarded. There is no `RidePoint` entity or `ride_points` table in a fresh schema; the SimRa CSV remains the authoritative raw trace archive.
 
 ---
 
@@ -222,4 +202,4 @@ These are `@ElementCollection` tables that store multi-valued fields of `rides`.
 
 The bearing and timestamp maps drive event creation during detour analysis: avoided-edge bearings come from the shortest-path geometry, chosen-edge bearings come from `ride_edge_bearings`.
 
-`ride_edges.ride_id` is indexed for the same reason as `ride_points.ride_id` above. `ride_edge_bearings` and `ride_edge_timestamps` don't need a separate index - their composite primary key `(ride_id, edge_id)` already supports fast lookups by `ride_id` alone.
+`ride_edges.ride_id` is indexed for per-ride edge lookup. `ride_edge_bearings` and `ride_edge_timestamps` don't need a separate index - their composite primary key `(ride_id, edge_id)` already supports fast lookups by `ride_id` alone.

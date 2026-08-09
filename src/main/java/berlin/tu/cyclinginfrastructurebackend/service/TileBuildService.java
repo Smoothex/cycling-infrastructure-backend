@@ -5,6 +5,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.TileStatusDto;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -99,6 +100,7 @@ public class TileBuildService {
     private volatile Instant lastGeneratedAt;
     private volatile String lastError;
 
+    @Autowired
     public TileBuildService(TileExportRepository tileExportRepository,
                             PipelineActivityTracker pipelineActivityTracker,
                             @Value("${tiles.directory}") String tilesDirectory,

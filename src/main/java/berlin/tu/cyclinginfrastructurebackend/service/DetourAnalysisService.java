@@ -1,7 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
-import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
@@ -22,8 +21,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.*;
 
@@ -37,7 +34,6 @@ public class DetourAnalysisService {
     private final StreetSegmentRepository streetSegmentRepository;
     private final RideIntentClassifier rideIntentClassifier;
     private final RouteComparisonClassifier routeComparisonClassifier;
-    private final TransactionTemplate transactionTemplate;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
     private final WKTWriter wktWriter = new WKTWriter();
 
@@ -49,62 +45,38 @@ public class DetourAnalysisService {
                                  StreetSegmentService streetSegmentService,
                                  StreetSegmentRepository streetSegmentRepository,
                                  RideIntentClassifier rideIntentClassifier,
-                                 RouteComparisonClassifier routeComparisonClassifier,
-                                 PlatformTransactionManager transactionManager) {
+                                 RouteComparisonClassifier routeComparisonClassifier) {
         this.graphHopperService = graphHopperService;
         this.rideRepository = rideRepository;
         this.streetSegmentService = streetSegmentService;
         this.streetSegmentRepository = streetSegmentRepository;
         this.rideIntentClassifier = rideIntentClassifier;
         this.routeComparisonClassifier = routeComparisonClassifier;
-        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
-    public Status analyzeRide(UUID rideId) {
-        Status result = transactionTemplate.execute(txStatus -> {
-            Ride ride = rideRepository.findById(rideId).orElse(null);
-            if (ride == null) {
-                log.warn("Ride with ID {} not found during analysis.", rideId);
-                return Status.ERROR;
-            }
-
-            try {
-                return analyzeLoadedRide(ride);
-            } catch (Exception e) {
-                log.error("Failed to analyze ride {}", rideId, e);
-                txStatus.setRollbackOnly();
-                return Status.ERROR;
-            }
-        });
-
-        if (result == Status.ERROR) {
-            rideRepository.updateStatus(rideId, Status.ERROR);
-        }
-        return result;
-    }
-
-    Status analyzeLoadedRide(Ride ride) {
-        List<RidePoint> points = ride.getRidePoints().stream()
-                .filter(p -> p.getLocation() != null)
-                .sorted(Comparator.comparingLong(RidePoint::getTimestamp))
-                .toList();
-
-        if (points.size() < 2 || ride.getTraversedEdgeIds().isEmpty() || ride.getTrajectory() == null) {
+    /** Mutates the transient ride and prepares events without persisting analytical state. */
+    public DetourAnalysisResult analyzeRide(Ride ride, List<RideTracePoint> canonicalTrace) {
+        if (ride.getStatus() == Status.SKIPPED
+                || canonicalTrace.size() < 2
+                || ride.getTraversedEdgeIds().isEmpty()
+                || ride.getTrajectory() == null) {
             ride.setStatus(Status.SKIPPED);
-            return Status.SKIPPED;
+            rideIntentClassifier.classify(ride);
+            return DetourAnalysisResult.empty();
         }
 
-        RidePoint start = points.getFirst();
-        RidePoint end = points.getLast();
+        RideTracePoint start = canonicalTrace.getFirst();
+        RideTracePoint end = canonicalTrace.getLast();
 
         ResponsePath shortestPath = graphHopperService.getShortestPath(
-                start.getLocation().getY(), start.getLocation().getX(),
-                end.getLocation().getY(), end.getLocation().getX()
+                start.location().getY(), start.location().getX(),
+                end.location().getY(), end.location().getX()
         );
 
         if (shortestPath == null) {
             ride.setStatus(Status.SKIPPED);
-            return Status.SKIPPED;
+            rideIntentClassifier.classify(ride);
+            return DetourAnalysisResult.empty();
         }
 
         Set<Integer> shortestEdges = extractEdgeIds(shortestPath);
@@ -139,7 +111,7 @@ public class DetourAnalysisService {
             log.debug("Ride {} is a CORRIDOR ALTERNATIVE. Skipping edge registration.", ride.getId());
             ride.setStatus(Status.PROCESSED);
             rideIntentClassifier.classify(ride);
-            return Status.PROCESSED;
+            return DetourAnalysisResult.empty();
         }
 
         if (comparisonType == RouteComparisonType.LOCAL_DETOUR) {
@@ -159,7 +131,8 @@ public class DetourAnalysisService {
             Map<Integer, Double> avoidedEdgeBearings = buildEdgeBearingsFromShortestPath(
                     shortestPath,
                     avoidedEdges);
-            Map<Integer, Long> avoidedEdgeTimestamps = computeAvoidedEdgeTimestamps(avoidedEdges, ride, points);
+            Map<Integer, Long> avoidedEdgeTimestamps = computeAvoidedEdgeTimestamps(
+                    avoidedEdges, ride, canonicalTrace);
 
             // Use pre-computed bearings from map matching instead of inferring direction
             Map<Integer, Double> chosenEdgeBearings = filterEdgeBearings(
@@ -174,22 +147,17 @@ public class DetourAnalysisService {
             ride.setStatus(Status.PROCESSED);
             rideIntentClassifier.classify(ride);
 
-            streetSegmentService.registerSegmentEvents(
+            return new DetourAnalysisResult(
                     avoidedEdgeBearings,
                     avoidedEdgeTimestamps,
                     chosenEdgeBearings,
-                    chosenEdgeTimestamps,
-                    ride,
-                    graphHopperService
-            );
-
-            return Status.PROCESSED;
+                    chosenEdgeTimestamps);
         }
 
         ride.setStatus(Status.PROCESSED);
         rideIntentClassifier.classify(ride);
 
-        return Status.PROCESSED;
+        return DetourAnalysisResult.empty();
     }
 
     private Set<Integer> extractEdgeIds(ResponsePath path) {
@@ -308,7 +276,7 @@ public class DetourAnalysisService {
     /**
      * Filters pre-computed edge bearings to include only the specified edge IDs.
      * <p>
-     * Bearings are pre-computed in {@link MapMatchingService#processRide},
+     * Bearings are pre-computed in {@link MapMatchingService#processRide(Ride, List)},
      * this method simply extracts the relevant subset of bearings for the chosen edges.
      *
      * @param allBearings the complete map of edge ID to bearing from the ride
@@ -361,15 +329,14 @@ public class DetourAnalysisService {
      */
     private Map<Integer, Long> computeAvoidedEdgeTimestamps(Set<Integer> avoidedEdges,
                                                             Ride ride,
-                                                            List<RidePoint> sortedPoints) {
+                                                            List<RideTracePoint> sortedPoints) {
         Map<Integer, Long> timestamps = new LinkedHashMap<>();
+        if (avoidedEdges.isEmpty()) {
+            return timestamps;
+        }
         DistanceCalcEarth distCalc = DistanceCalcEarth.DIST_EARTH;
 
-        List<RidePoint> candidatePoints = sortedPoints.stream()
-                .filter(p -> p.getTimestamp() != null)
-                .toList();
-
-        if (candidatePoints.isEmpty()) {
+        if (sortedPoints.isEmpty()) {
             // fallback start time
             for (Integer edgeId : avoidedEdges) {
                 timestamps.put(edgeId, ride.getStartTime());
@@ -397,13 +364,13 @@ public class DetourAnalysisService {
             double edgeLat = geometry.getLat(midIdx);
             double edgeLon = geometry.getLon(midIdx);
 
-            // Find closest RidePoint
-            RidePoint closestPoint = null;
+            // Find the closest transient trace point.
+            RideTracePoint closestPoint = null;
             double minDistance = Double.MAX_VALUE;
 
-            for (RidePoint point : candidatePoints) {
-                double pointLat = point.getLocation().getY();
-                double pointLon = point.getLocation().getX();
+            for (RideTracePoint point : sortedPoints) {
+                double pointLat = point.location().getY();
+                double pointLon = point.location().getX();
                 double distance = distCalc.calcNormalizedDist(edgeLat, edgeLon, pointLat, pointLon);
 
                 if (distance < minDistance) {
@@ -412,7 +379,7 @@ public class DetourAnalysisService {
                 }
             }
 
-            timestamps.put(edgeId, closestPoint != null ? closestPoint.getTimestamp() : ride.getStartTime());
+            timestamps.put(edgeId, closestPoint != null ? closestPoint.timestamp() : ride.getStartTime());
         }
 
         return timestamps;

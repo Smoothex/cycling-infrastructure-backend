@@ -69,7 +69,11 @@ class RouteComparisonExportServiceTest {
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(entityManager).createNativeQuery(sql.capture());
-        assertThat(sql.getValue()).contains("PARTITION BY r.route_comparison_type");
+        assertThat(sql.getValue())
+                .contains("PARTITION BY r.route_comparison_type")
+                .contains("r.median_gps_accuracy")
+                .contains("r.gps_point_count")
+                .doesNotContain("ride_points");
     }
 
     @Test
@@ -77,5 +81,26 @@ class RouteComparisonExportServiceTest {
         assertThatThrownBy(() -> service.exportCalibrationSample(2_000L, 1_000L, 50))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void nullRideAggregatesRemainBlankInCsv() throws Exception {
+        Query query = mock(Query.class);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(List.<Object[]>of(new Object[]{
+                UUID.randomUUID(), 1_000L, "EQUIVALENT_ROUTE",
+                1_000.0, 1_000.0, 0.0, 0.0, 1.0,
+                null, null, "LINESTRING EMPTY", "LINESTRING EMPTY"
+        }));
+
+        List<String[]> records;
+        try (CSVReader reader = new CSVReader(new StringReader(
+                service.exportCalibrationSample(null, null, 1)))) {
+            records = reader.readAll();
+        }
+
+        assertThat(records.get(1)[8]).isEmpty();
+        assertThat(records.get(1)[9]).isEmpty();
     }
 }

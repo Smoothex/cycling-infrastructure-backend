@@ -96,7 +96,6 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `graphhopper.osm.file` | `./data/osm/germany-latest.osm.pbf` | OSM source file |
 | `graphhopper.osm.download-url` | Geofabrik Germany extract | Where the OSM file is fetched from if missing |
 | `pipeline.import.enabled` | `false` | Enable SimRa ride import |
-| `pipeline.analysis.enabled` | `true` | Enable detour analysis scheduler |
 | `pipeline.enrichment.weather.enabled` | `true` | Enable Open-Meteo enrichment |
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
 | `pipeline.enrichment.ohsome.enabled` | `true` | Enable Ohsome OSM enrichment (rate-limited) |
@@ -120,18 +119,14 @@ data/
 
 ## Data Pipeline Overview
 
-The pipeline runs as a set of scheduled background jobs. Each job claims a batch of work, processes it, and marks records done - so the pipeline is resumable and restartable.
+Ride import performs map matching and detour analysis inline. Enrichment remains a set of scheduled background jobs that claim and update segment events.
 
 ```
 SimRa CSV files
       │
       ▼
-[SimRa Importer]  every 30s
-  Parse ride CSV → map-match GPS to road network → store Ride + RidePoints + edge traversals
-      │
-      ▼
-[Detour Analyzer]  every 10s
-  Compute shortest path → compare to actual route → create SegmentEvents (AVOIDANCE / PREFERENCE)
+[SimRa Importer]  bounded batches until the source scan is exhausted
+  Parse transient GPS trace → map-match → compare shortest path → atomically store finalized Ride + counters + SegmentEvents
       │
       ▼
 [Enrichment Schedulers]  every 60s (parallel, independent)
