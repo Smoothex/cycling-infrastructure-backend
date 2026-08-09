@@ -1,10 +1,5 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
-import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
-import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
-import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
-import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import com.graphhopper.util.DistanceCalcEarth;
 import com.graphhopper.util.EdgeIteratorState;
@@ -14,58 +9,25 @@ import com.graphhopper.util.shapes.BBox;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.*;
 
 @Service
 public class StreetSegmentService {
-    private static final Logger log = LoggerFactory.getLogger(StreetSegmentService.class);
     private final StreetSegmentRepository repository;
-    private final SegmentEventRepository segmentEventRepository;
-    private final TransactionTemplate transactionTemplate;
     private final TransactionTemplate segmentCreationTransactionTemplate;
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
     public StreetSegmentService(StreetSegmentRepository repository,
-                                SegmentEventRepository segmentEventRepository,
                                 PlatformTransactionManager transactionManager) {
         this.repository = repository;
-        this.segmentEventRepository = segmentEventRepository;
-        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.segmentCreationTransactionTemplate = new TransactionTemplate(transactionManager);
         this.segmentCreationTransactionTemplate.setPropagationBehavior(
                 TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-    }
-
-    public void recordUsage(List<EdgeIteratorState> edges, GraphHopperService hopperService) {
-        if (edges == null || edges.isEmpty()) {
-            return;
-        }
-
-        Map<Long, Integer> usageByEdgeId = new TreeMap<>();
-        for (EdgeIteratorState edge : edges) {
-            usageByEdgeId.merge((long) edge.getEdge(), 1, Integer::sum);
-        }
-        List<Integer> edgeIds = usageByEdgeId.keySet().stream()
-                .map(Long::intValue)
-                .toList();
-
-        ensureSegmentsExist(edgeIds, hopperService);
-
-        transactionTemplate.executeWithoutResult(status -> {
-            int updatedRows = repository.incrementUsageCounts(usageByEdgeId);
-            if (updatedRows != usageByEdgeId.size()) {
-                throw new IllegalStateException("Expected to update " + usageByEdgeId.size()
-                        + " street segments, but updated " + updatedRows);
-            }
-        });
     }
 
     public void ensureSegmentsExist(Collection<Integer> edgeIds, GraphHopperService hopperService) {
@@ -96,87 +58,13 @@ public class StreetSegmentService {
             return;
         }
 
-        // Segment rows may be created while a ride-analysis transaction is active. Commit
-        // these inserts separately so their subset locks are released before that outer
-        // transaction takes the complete, ordered event-segment lock.
+        // Keep reference creation isolated from the later final ride transaction. If later
+        // analysis fails, an unused segment with zero counters is harmless and reusable.
         segmentCreationTransactionTemplate.executeWithoutResult(status -> {
             for (SegmentUpsert segment : missingSegments) {
                 repository.upsertSegment(segment.id(), segment.name(), segment.geometry(), segment.gradientPercent());
             }
         });
-    }
-
-    @Transactional
-    public void registerSegmentEvents(Map<Integer, Double> avoidedEdgeBearings,
-                                      Map<Integer, Long> avoidedEdgeTimestamps,
-                                      Map<Integer, Double> chosenEdgeBearings,
-                                      Map<Integer, Long> chosenEdgeTimestamps,
-                                      Ride ride,
-                                      GraphHopperService hopperService) {
-        boolean hasAvoidedEdges = avoidedEdgeBearings != null && !avoidedEdgeBearings.isEmpty();
-        boolean hasChosenEdges = chosenEdgeBearings != null && !chosenEdgeBearings.isEmpty();
-        if (!hasAvoidedEdges && !hasChosenEdges) return;
-
-        Set<Integer> allEdgeIds = new HashSet<>();
-        if (hasAvoidedEdges) {
-            allEdgeIds.addAll(avoidedEdgeBearings.keySet());
-        }
-        if (hasChosenEdges) {
-            allEdgeIds.addAll(chosenEdgeBearings.keySet());
-        }
-
-        List<Integer> sortedEdgeIds = new ArrayList<>(allEdgeIds);
-        Collections.sort(sortedEdgeIds);
-
-        // lock every segment this transaction will touch in one ascending pass first incrementAvoidanceAll/incrementPreferenceAll each lock their segments, but
-        // running them in parallel resets the order between the two calls, which let concurrent rides deadlock when one ride's avoided segment is another ride's chosen segment
-        repository.lockForUpdate(sortedEdgeIds.stream().map(Integer::longValue).toList());
-
-        if (hasAvoidedEdges) {
-            repository.incrementAvoidanceAll(
-                    avoidedEdgeBearings.keySet().stream().map(Integer::longValue).toList());
-        }
-        if (hasChosenEdges) {
-            repository.incrementPreferenceAll(
-                    chosenEdgeBearings.keySet().stream().map(Integer::longValue).toList());
-        }
-
-        List<SegmentEvent> eventRecords = new ArrayList<>();
-        for (Integer edgeId : sortedEdgeIds) {
-            StreetSegment segment = repository.getReferenceById(edgeId.longValue());
-
-            if (hasAvoidedEdges && avoidedEdgeBearings.containsKey(edgeId)) {
-                // fallback to ride start time
-                Long edgeTimestamp = avoidedEdgeTimestamps != null
-                        ? avoidedEdgeTimestamps.get(edgeId)
-                        : ride.getStartTime();
-
-                eventRecords.add(SegmentEvent.of(
-                        SegmentEventType.AVOIDANCE,
-                        segment,
-                        ride,
-                        edgeTimestamp,
-                        avoidedEdgeBearings.get(edgeId)
-                ));
-            }
-
-            if (hasChosenEdges && chosenEdgeBearings.containsKey(edgeId)) {
-                // fallback to ride start time
-                Long edgeTimestamp = chosenEdgeTimestamps != null
-                        ? chosenEdgeTimestamps.get(edgeId)
-                        : ride.getStartTime();
-                
-                eventRecords.add(SegmentEvent.of(
-                        SegmentEventType.PREFERENCE,
-                        segment,
-                        ride,
-                        edgeTimestamp,
-                        chosenEdgeBearings.get(edgeId)
-                ));
-            }
-        }
-
-        segmentEventRepository.saveAll(eventRecords);
     }
 
     private Optional<SegmentUpsert> buildSegmentUpsert(int edgeId, GraphHopperService hopperService) {

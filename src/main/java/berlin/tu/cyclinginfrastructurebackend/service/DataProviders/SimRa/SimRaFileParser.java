@@ -2,13 +2,14 @@ package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.SimRa;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.Incident;
 import berlin.tu.cyclinginfrastructurebackend.domain.Ride;
-import berlin.tu.cyclinginfrastructurebackend.domain.RidePoint;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.BikeType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.IncidentType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ParticipantType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.PhoneLocation;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.IncidentCsvBean;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.RidePointCsvBean;
+import berlin.tu.cyclinginfrastructurebackend.service.ParsedRide;
+import berlin.tu.cyclinginfrastructurebackend.service.RideTracePoint;
 import com.opencsv.bean.CsvToBeanBuilder;
 import org.jspecify.annotations.NonNull;
 import org.locationtech.jts.geom.Coordinate;
@@ -36,7 +37,7 @@ public class SimRaFileParser {
 
     private final GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
 
-    public Ride parse(InputStream inputStream, String filename) throws IOException {
+    public ParsedRide parse(InputStream inputStream, String filename) throws IOException {
         Ride ride = new Ride();
         ride.setOriginalFilename(filename);
 
@@ -67,9 +68,9 @@ public class SimRaFileParser {
         }
 
         parseIncidents(ride, incidentLines);
-        parseRidePoints(ride, rideLines);
+        List<RideTracePoint> trace = parseRidePoints(ride, rideLines);
 
-        return ride;
+        return new ParsedRide(ride, trace);
     }
 
     private void parseIncidents(Ride ride, List<String> lines) {
@@ -95,17 +96,21 @@ public class SimRaFileParser {
         ride.setIncidents(incidents);
     }
 
-    private void parseRidePoints(Ride ride, List<String> lines) {
+    private List<RideTracePoint> parseRidePoints(Ride ride, List<String> lines) {
         List<RidePointCsvBean> beans = mapLinesToBeans(lines, "lat,", RidePointCsvBean.class);
 
-        List<RidePoint> points = new ArrayList<>();
-        int sequence = 0;
+        List<RideTracePoint> points = new ArrayList<>();
+        List<Double> accuracies = new ArrayList<>();
         for (RidePointCsvBean bean : beans) {
-            RidePoint point = mapToRidePoint(bean, sequence++, ride);
-            points.add(point);
+            points.add(mapToTracePoint(bean));
+            if (bean.getAcc() != null) {
+                accuracies.add(bean.getAcc());
+            }
         }
-        ride.setRidePoints(points);
+        ride.setGpsPointCount((long) beans.size());
+        ride.setMedianGpsAccuracy(median(accuracies));
         addPointsToRide(ride, points);
+        return points;
     }
 
     private <T> List<T> mapLinesToBeans(List<String> lines, String headerMarker, Class<T> type) {
@@ -200,35 +205,34 @@ public class SimRaFileParser {
         return incident;
     }
 
-    private RidePoint mapToRidePoint(RidePointCsvBean bean, int sequence, Ride ride) {
-        RidePoint point = new RidePoint();
-        point.setRide(ride);
-        point.setSequenceIndex(sequence);
-        point.setTimestamp(bean.getTimeStamp());
-
+    private RideTracePoint mapToTracePoint(RidePointCsvBean bean) {
+        org.locationtech.jts.geom.Point location = null;
         if (bean.getLat() != null && bean.getLon() != null) {
-            point.setLocation(geometryFactory.createPoint(new Coordinate(bean.getLon(), bean.getLat())));
+            location = geometryFactory.createPoint(new Coordinate(bean.getLon(), bean.getLat()));
         }
-
-        point.setX(bean.getX());
-        point.setY(bean.getY());
-        point.setZ(bean.getZ());
-        point.setGpsAccuracy(bean.getAcc());
-        point.setA(bean.getA());
-        point.setB(bean.getB());
-        point.setC(bean.getC());
-
-        return point;
+        return new RideTracePoint(location, bean.getTimeStamp());
     }
 
-    private void addPointsToRide(Ride ride, List<RidePoint> points) {
+    private Double median(List<Double> values) {
+        if (values.isEmpty()) {
+            return null;
+        }
+        values.sort(Double::compareTo);
+        int middle = values.size() / 2;
+        if (values.size() % 2 == 1) {
+            return values.get(middle);
+        }
+        return (values.get(middle - 1) + values.get(middle)) / 2.0;
+    }
+
+    private void addPointsToRide(Ride ride, List<RideTracePoint> points) {
         if (!points.isEmpty()) {
-            ride.setStartTime(points.getFirst().getTimestamp());
-            ride.setEndTime(points.getLast().getTimestamp());
+            ride.setStartTime(points.getFirst().timestamp());
+            ride.setEndTime(points.getLast().timestamp());
 
             Coordinate[] coordinates = points.stream()
-                    .filter(p -> p.getLocation() != null)
-                    .map(p -> p.getLocation().getCoordinate())
+                    .filter(p -> p.location() != null)
+                    .map(p -> p.location().getCoordinate())
                     .toArray(Coordinate[]::new);
 
             if (coordinates.length >= 2) {

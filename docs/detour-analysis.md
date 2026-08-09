@@ -2,7 +2,7 @@
 
 ## What This Does
 
-After a ride is map-matched to the road network, the detour analyzer computes the shortest path between the ride's start and end points and compares it to the actual route. This produces two types of events per street segment:
+Immediately after a ride is map-matched, inline detour analysis computes the shortest path between the first and last points of the canonical in-memory trace and compares it to the actual route. This produces two types of events per street segment:
 
 - **Avoidance** — segment was on the shortest path but the cyclist went around it
 - **Preference** — segment was *not* on the shortest path but the cyclist chose it anyway
@@ -137,20 +137,16 @@ A score is computed from multiple signals. If `score ≥ 2` → COMMUTE; if `sco
 
 ## Performance
 
-Detour analysis runs one GraphHopper routing query and several database round trips per ride, across a batch of up to `pipeline.analysis.batch-size` rides on `pipeline.analysis.thread-pool-size` parallel threads. Three things keep this fast at scale:
+Detour analysis runs inside each parallel import task, after map matching and before final persistence. Three things keep this fast at scale:
 
 - **Contraction Hierarchy (CH) routing.** Finding a minimum-distance path on a country-sized road network means searching outward through millions of intersections until the destination turns up - too slow to do for every ride. CH fixes this with one-time prep at startup: it ranks intersections by importance and adds direct shortcuts between the important ones, similar to how a road atlas highlights highways over side streets. At query time, GraphHopper mostly follows these shortcuts instead of the full street grid, so a route lookup drops from seconds to single-digit milliseconds. See the README's "Run the backend in Docker" section for the one-time prep cost.
-- **Atomic ride analysis with isolated segment creation.** `DetourAnalysisService.analyzeRide` keeps the ride, counters, and events in one main transaction. Missing `street_segments` reference rows are created first in a short `REQUIRES_NEW` transaction, releasing those subset locks before the main transaction locks its complete segment set in ascending order. This prevents parallel rides from deadlocking while preserving atomic counter and event updates. If the main analysis later fails, an unused reference row may remain with zero observations, but no partial analytical signal is persisted.
-- **Indexed per-ride lookups.** `ride_points.ride_id` and `ride_edges.ride_id` are indexed (see [data-model.md](data-model.md)), so loading a ride's GPS trace and traversed edges is an index lookup rather than a full table scan, independent of how many rides have accumulated in the database.
+- **Short final transaction with isolated segment creation.** GraphHopper routing and PostGIS spatial comparisons finish before `RideFinalizationService` starts its transaction. Missing `street_segments` reference rows are created first in short `REQUIRES_NEW` transactions. The finalizer flushes the finalized ride, locks the complete union of usage, avoidance, and preference segments once in ascending order, updates counters, and saves events. A failure rolls back all ride-related state; an unused zero-count reference row may remain.
+- **Transient trace reuse.** The canonical GPS list stays in memory and is shared by map matching, endpoint selection, and nearest-point timestamp calculations, avoiding persisted point writes and later per-ride trace reloads.
 
-## Scheduler Configuration
+## Analysis Configuration
 
 | Property | Default | Description |
 |---|---|---|
-| `pipeline.analysis.enabled` | `true` | Enable/disable the scheduler |
-| `pipeline.analysis.delay-ms` | `10000` | Polling interval (ms) |
-| `pipeline.analysis.batch-size` | `500` | Rides claimed per batch |
-| `pipeline.analysis.thread-pool-size` | `8` | Parallel GraphHopper workers |
 | `analysis.minimum-origin-destination-distance-meters` | `500` | Minimum geodesic distance between the first and last valid GPS points |
 | `analysis.detour.threshold` | `0.10` | Detour detection threshold (10%) |
 | `analysis.route-overlap.minimum-ratio` | `0.30` | Minimum spatially covered share of the shortest path for a local detour |

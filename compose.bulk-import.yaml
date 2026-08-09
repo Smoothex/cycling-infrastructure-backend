@@ -22,7 +22,7 @@ services:
       - "-c"
       - "idle_in_transaction_session_timeout=35min"
       - "-c"
-      - "shared_buffers=1GB"
+      - "shared_buffers=2GB"
       - "-c"
       - "work_mem=64MB"
       - "-c"
@@ -43,3 +43,41 @@ services:
       - "full_page_writes=off"
       - "-c"
       - "synchronous_commit=off"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    mem_limit: 14g
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cyclingdb
+      SPRING_DATASOURCE_USERNAME: user
+      SPRING_DATASOURCE_PASSWORD: password
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:4200,http://localhost:25080,http://localhost:8080
+      SIMRA_DATA_PATH: /app/data/SimRa
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      # SimRa ride files; override the host location via SIMRA_HOST_PATH in .env
+      # (e.g. SIMRA_HOST_PATH=/Users/me/Downloads/SimRa)
+      # - ${SIMRA_HOST_PATH:-./data/SimRa}:/app/data/SimRa:ro
+      - simra-data:/app/data/SimRa:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      default:
+      simra:
+        aliases:
+          - spring
+
+networks:
+  simra:
+    name: simra_simra-network
+    external: true
+
+volumes:
+  simra-data:
+    name: simra-data
+    external: true

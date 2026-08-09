@@ -5,11 +5,9 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Set;
@@ -19,11 +17,6 @@ import java.util.UUID;
 public interface RideRepository extends JpaRepository<Ride, UUID> {
     @Query("SELECT r.originalFilename FROM Ride r")
     Set<String> findAllOriginalFilenames();
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("UPDATE Ride r SET r.status = :status WHERE r.id = :id")
-    int updateStatus(UUID id, Status status);
 
     /**
      * Calculates which share of the shortest path's physical length is covered by a

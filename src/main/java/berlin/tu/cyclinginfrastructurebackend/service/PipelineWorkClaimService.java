@@ -1,7 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.service;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,15 +26,6 @@ public class PipelineWorkClaimService {
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void resetInterruptedWork() {
-        int ridesReset = entityManager.createQuery("""
-                        UPDATE Ride r
-                        SET r.status = :pending
-                        WHERE r.status = :analyzing
-                        """)
-                .setParameter("pending", Status.PENDING)
-                .setParameter("analyzing", Status.ANALYZING)
-                .executeUpdate();
-
         int weatherInitialized = initializeEnrichmentStatus("weather_processing_status", "weather_enriched");
         int berlinOpenDataInitialized = initializeEnrichmentStatus(
                 "berlin_open_data_processing_status",
@@ -49,13 +39,12 @@ public class PipelineWorkClaimService {
         int ohsomeReset = resetEnrichmentProcessing("ohsome_processing_status");
         int trafficReset = resetEnrichmentProcessing("traffic_processing_status");
 
-        if (ridesReset > 0 || weatherInitialized > 0 || berlinOpenDataInitialized > 0
+        if (weatherInitialized > 0 || berlinOpenDataInitialized > 0
                 || ohsomeInitialized > 0 || trafficInitialized > 0
                 || weatherReset > 0 || berlinOpenDataReset > 0 || ohsomeReset > 0 || trafficReset > 0) {
-            log.info("Reset interrupted pipeline work: rides={}, initialized enrichment statuses={} "
+            log.info("Reset interrupted enrichment work: initialized statuses={} "
                             + "(weather={}, berlinOpenData={}, ohsome={}, traffic={}), reset enrichment statuses={} "
                             + "(weather={}, berlinOpenData={}, ohsome={}, traffic={})",
-                    ridesReset,
                     weatherInitialized + berlinOpenDataInitialized + ohsomeInitialized + trafficInitialized,
                     weatherInitialized,
                     berlinOpenDataInitialized,
@@ -67,23 +56,6 @@ public class PipelineWorkClaimService {
                     ohsomeReset,
                     trafficReset);
         }
-    }
-
-    @Transactional
-    public List<UUID> claimPendingRidesForAnalysis(int batchSize) {
-        return claimIds("""
-                UPDATE rides
-                SET status = 'ANALYZING'
-                WHERE id IN (
-                    SELECT id
-                    FROM rides
-                    WHERE status = 'PENDING'
-                    ORDER BY start_time NULLS LAST, id
-                    LIMIT :batchSize
-                    FOR UPDATE SKIP LOCKED
-                )
-                RETURNING id
-                """, batchSize);
     }
 
     @Transactional
