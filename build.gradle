@@ -31,8 +31,13 @@ dependencies {
     implementation 'com.graphhopper:graphhopper-core:11.0'
     implementation('com.graphhopper:graphhopper-map-matching:11.0')
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.21")
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.opencsv:opencsv:5.9'
     implementation("org.locationtech.jts.io:jts-io-common:1.20.0")
+    implementation 'org.apache.parquet:parquet-hadoop:1.17.1'
+    implementation 'com.github.luben:zstd-jni:1.5.7-3'
+    implementation 'org.locationtech.proj4j:proj4j:1.4.2'
+    implementation 'org.locationtech.proj4j:proj4j-epsg:1.4.2'
     implementation 'org.apache.commons:commons-compress:1.26.2'
     implementation 'org.apache.poi:poi-ooxml:5.2.5'
     runtimeOnly 'org.postgresql:postgresql'
@@ -47,4 +52,9 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+tasks.named('bootRun') {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
 }

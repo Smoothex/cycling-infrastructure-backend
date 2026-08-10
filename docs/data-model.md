@@ -102,11 +102,16 @@ One record per avoidance or preference observation. This is the primary analytic
 
 Note: `bikeType` appears in the REST API's event JSON (see [data-export.md](data-export.md)) but is not a `segment_events` column — it's read from the joined `Ride` at serialization time.
 
-Indexed on `segment_id`, `eventTimestamp`, `eventType`, and `cyclewayType` — the first three back the common per-segment/time-range/type lookups; the `cyclewayType` index backs the infrastructure-signals analytics query.
+Indexed on `segment_id`, `eventTimestamp`, `eventType`, and `cyclewayType` — the first three back the common per-segment/time-range/type lookups;
+the `cyclewayType` index backs the infrastructure-signals analytics query. A composite `ohsomeProcessingStatus,eventTimestamp,segment_id` 
+index supports the local Ohsome segment/month work queue.
 
 **Enrichment status fields** (one pair per source):
 
 Each source tracks its own boolean flag and processing status independently, so partial enrichment is possible and failed sources can be retried without re-processing others.
+
+For Ohsome, `DONE` means that the segment/month pair was evaluated successfully; it does not necessarily mean that attributes were found. 
+`ohsomeEnriched=true` is reserved for a reliable historical road match. A supported snapshot with no reliable match, or an event outside the configured snapshot area/time range, ends as `DONE` with `ohsomeEnriched=false`. A missing snapshot leaves work `PENDING`, while an unexpected processing failure produces `ERROR`.
 
 | Source | Flag field | Status field | Values |
 |---|---|---|---|

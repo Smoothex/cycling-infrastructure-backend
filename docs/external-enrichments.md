@@ -1,11 +1,13 @@
 # External Data Enrichments
 
-Each segment event (avoidance or preference) is enriched with contextual data from four sources. Enrichment runs as independent scheduled jobs that claim batches of un-enriched events and write `SegmentExternalFactor` records.
+Each segment event (avoidance or preference) can be enriched with contextual data from four sources. Enrichment runs as independent scheduled jobs. Weather and road-closure results can create `SegmentExternalFactor` records; traffic and Ohsome attributes are stored directly on `SegmentEvent`.
 
-All enrichment jobs share the same pattern:
+The event-driven enrichment jobs generally share the same status pattern:
 1. Claim a batch of events with `enrichment_status = PENDING`
 2. Fetch or compute the relevant data
-3. Persist a `SegmentExternalFactor` record and mark the event `ENRICHED` (or `FAILED`)
+3. Persist the result and mark the source-specific status `DONE` (or `ERROR`)
+
+Ohsome uses a specialized segment/month batch described below so that one cached historical snapshot and one deterministic spatial match can serve every event on the same segment in the same month.
 
 ---
 
@@ -117,17 +119,44 @@ Property names here use `berlin-open-data` for historical reasons — they confi
 
 ## OSM Attributes — Ohsome API
 
-**Source:** `https://api.ohsome.org/v1`  
+**Source:** `https://api.heigit.org/ohsome-api-staging/v2/extraction/features.parquet`
 
-Queries historical OpenStreetMap tag values at the precise timestamp of each event, so the infrastructure state at the time of the ride is captured (not current state). This matters for infrastructure that has changed — e.g., a cycle path added after the rides were recorded.
+The backend downloads 73 historical GeoParquet snapshots: one at `00:00:00Z` on the first day of every month from January 2019 through January 2025. Each request covers Berlin plus an approximately 10 km buffer (`[12.94, 52.24, 13.91, 52.77]`), uses the filter `type:way and highway=*`, and sets `clip=false` so that complete intersecting road geometries are retained.
 
-**OSM attributes fetched per event:**
+This is a deliberate monthly approximation. An event is matched against the snapshot at the start of its UTC calendar month, rather than against an exact event-time API response. The assigned tags can therefore lag an OSM edit made later in that month. Events outside the configured time range or area are finalized without OSM attributes instead of being assigned a misleading snapshot.
+
+### Snapshot cache
+
+Snapshots are stored below `./data/ohsome/v2/berlin-10km-monthly-v1/`, which is excluded from Git and mounted at `/app/data` in Docker. `manifest.json` records the dataset parameters and the checksum, size, retrieval time, and timestamp of each `snapshots/YYYY-MM.parquet` file.
+
+Before claiming Ohsome events, the backend validates the complete cache. Missing snapshots are fetched sequentially with the HeiGIT key from `HEIGIT_API_KEY`, first written as `.parquet.part`, validated and checksummed, and then moved atomically into place. Valid cached files are never fetched again and a complete cache can be used without an API key. There is no Ohsome v1 fallback.
+
+Docker Compose reads `HEIGIT_API_KEY=...` from the repository's `.env` file and passes it into the backend container. When running Spring directly on the host, export the same environment variable before starting the application; Spring does not load the Compose `.env` file itself. The key is never written to the manifest or logs.
+
+### Deterministic segment matching
+
+Ohsome enrichment treats a distinct street-segment/month pair as one work item. The month's road LineStrings are transformed with the GraphHopper segment to EPSG:25833, indexed spatially, and compared using the full segment geometry rather than only its centroid. Normal segments are sampled at most every 5 metres; a candidate must cover at least 80% of those samples within 15 metres and have an undirected local-bearing difference no greater than 45 degrees. Candidates with a conflicting nonblank normalized street name are rejected. Segments shorter than 2 metres use a stricter 5-metre distance rule without an unreliable bearing test. The winner is selected deterministically by coverage, name compatibility, median distance, bearing difference, and OSM ID. Near-ties remain unmatched instead of receiving an unreliable road assignment.
+
+All events for the selected segment/month pair receive the same result in one database batch:
+
+| Outcome | Status | `ohsomeEnriched` |
+|---|---|---|
+| Reliable feature match | `DONE` | `true` |
+| No reliable or unambiguous match | `DONE` | `false` |
+| Outside the supported time range or area | `DONE` | `false` |
+| Unexpected processing failure | `ERROR` | `false` |
+
+A missing or invalid snapshot prevents any supported Ohsome work from being claimed until the complete 73-file cache is ready. This avoids mixing partial snapshot datasets and leaves the work `PENDING` for a later retry.
+
+The selected OSM way ID and match score are intentionally not added to the database schema. Reproducibility comes from the immutable snapshot manifest and deterministic matching rules; per-event match auditing would require a separate schema extension.
+
+**OSM attributes stored for each matched event:**
 
 Deprecated `cycleway=opposite*` values are normalized to their modern `oneway:bicycle`/`cycleway` equivalents before extraction.
 
 | Tag | Description |
 |---|---|
-| `surface` | Road surface material (asphalt, cobblestone, etc.) — stored as-is on the segment |
+| `surface` | Road surface material (asphalt, cobblestone, etc.) — stored as-is on the segment event |
 | `smoothness` | Surface quality (excellent → very_horrible) |
 | `highway` | Road classification (primary, residential, etc.) |
 | `lit` | Street lighting (yes/no) |
@@ -138,14 +167,19 @@ Deprecated `cycleway=opposite*` values are normalized to their modern `oneway:bi
 
 Note: `maxspeed` is **not** fetched or stored despite earlier versions of this doc — there is no corresponding field on `SegmentEvent`.
 
-**Rate limiting:** 500 ms between API calls.
-
 | Property | Default |
 |---|---|
 | `pipeline.enrichment.ohsome.enabled` | `true` |
-| `pipeline.enrichment.ohsome.batch-size` | `250` |
-| `pipeline.enrichment.ohsome.delay-between-calls-ms` | `500` |
+| `pipeline.enrichment.ohsome.batch-size` | `5000` segment/month pairs |
 | `pipeline.enrichment.ohsome.delay-ms` | `60000` |
+| `ohsome.v2.base-url` | `https://api.heigit.org/ohsome-api-staging/v2` |
+| `ohsome.v2.api-key` | `${HEIGIT_API_KEY:}` |
+| `ohsome.v2.cache-path` | `./data/ohsome/v2/berlin-10km-monthly-v1` |
+| `ohsome.v2.start-month` / `end-month` | `2019-01` / `2025-01` |
+| `ohsome.v2.bbox` | `12.94,52.24,13.91,52.77` |
+| `ohsome.v2.filter` / `clip` | `type:way and highway=*` / `false` |
+| `ohsome.v2.download-interval` | `PT60S` |
+| `ohsome.v2.max-retries` | `3` |
 
 ---
 
