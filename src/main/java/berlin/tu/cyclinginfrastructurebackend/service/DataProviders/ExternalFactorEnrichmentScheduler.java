@@ -7,7 +7,7 @@ import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.RoadClosures.RoadClosureDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.Traffic.TrafficDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
-import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeApiDataProvider;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeV2EnrichmentService;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineWorkClaimService;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
@@ -44,7 +44,7 @@ public class ExternalFactorEnrichmentScheduler {
     private final SegmentEventRepository segmentEventRepository;
     private final WeatherDataProvider weatherDataProvider;
     private final RoadClosureDataProvider roadClosureDataProvider;
-    private final OhsomeApiDataProvider ohsomeApiDataProvider;
+    private final OhsomeV2EnrichmentService ohsomeV2EnrichmentService;
     private final TrafficDataProvider trafficDataProvider;
     private final PipelineWorkClaimService workClaimService;
     private final TileBuildService tileBuildService;
@@ -74,11 +74,8 @@ public class ExternalFactorEnrichmentScheduler {
     @Value("${pipeline.enrichment.ohsome.enabled:false}")
     private boolean ohsomeEnabled;
 
-    @Value("${pipeline.enrichment.ohsome.batch-size:50}")
+    @Value("${pipeline.enrichment.ohsome.batch-size:5000}")
     private int ohsomeBatchSize;
-
-    @Value("${pipeline.enrichment.ohsome.delay-between-calls-ms:500}")
-    private long ohsomeCallDelayMs;
 
     @Value("${pipeline.enrichment.traffic.enabled:false}")
     private boolean trafficEnabled;
@@ -89,7 +86,7 @@ public class ExternalFactorEnrichmentScheduler {
     public ExternalFactorEnrichmentScheduler(SegmentEventRepository segmentEventRepository,
                                              WeatherDataProvider weatherDataProvider,
                                              RoadClosureDataProvider roadClosureDataProvider,
-                                             OhsomeApiDataProvider ohsomeApiDataProvider,
+                                             OhsomeV2EnrichmentService ohsomeV2EnrichmentService,
                                              TrafficDataProvider trafficDataProvider,
                                              PipelineWorkClaimService workClaimService,
                                              TileBuildService tileBuildService,
@@ -97,7 +94,7 @@ public class ExternalFactorEnrichmentScheduler {
         this.segmentEventRepository = segmentEventRepository;
         this.weatherDataProvider = weatherDataProvider;
         this.roadClosureDataProvider = roadClosureDataProvider;
-        this.ohsomeApiDataProvider = ohsomeApiDataProvider;
+        this.ohsomeV2EnrichmentService = ohsomeV2EnrichmentService;
         this.trafficDataProvider = trafficDataProvider;
         this.workClaimService = workClaimService;
         this.tileBuildService = tileBuildService;
@@ -151,29 +148,7 @@ public class ExternalFactorEnrichmentScheduler {
     @Scheduled(fixedDelayString = "${pipeline.enrichment.ohsome.delay-ms:60000}")
     public void enrichOhsomePending() {
         if (!isEnabled(ohsomeEnabled)) return;
-
-        runClaimedBatch(
-                "OSM Infrastructure (ohsome API)",
-                () -> workClaimService.claimOhsomeEvents(ohsomeBatchSize),
-                event -> {
-                    ohsomeApiDataProvider.enrichEvent(event);
-                    segmentEventRepository.markOhsomeEnriched(
-                            event.getId(),
-                            EnrichmentStatus.DONE,
-                            event.getSurface(),
-                            event.getSmoothness(),
-                            event.getLit(),
-                            event.getHighway(),
-                            event.getCyclewayType(),
-                            event.getCyclewayLocation(),
-                            event.getCyclewaySurface(),
-                            event.getCyclewayWidth(),
-                            event.getBicycleOneway()
-                    );
-                },
-                segmentEventRepository::updateOhsomeProcessingStatus,
-                ohsomeCallDelayMs
-        );
+        ohsomeV2EnrichmentService.drainPending(ohsomeBatchSize);
     }
 
     @Scheduled(fixedDelayString = "${pipeline.enrichment.traffic.delay-ms:60000}")

@@ -81,11 +81,12 @@ This file is required before anything else can run: GraphHopper builds its routi
 every pipeline stage depends on: map-matching of SimRa rides, shortest-path computation for detour analysis, and the 
 street segment geometry itself.
 
-Geofabrik serves the **latest** state of OpenStreetMap. The road network in the routing graph therefore reflects today's 
-infrastructure, not the infrastructure as it existed when the rides were recorded. In order to be able to assign historical
-OSM data at the time of a preference or avoidance event, there is an ohsome enrichment: it queries 
-the [ohsome API](https://api.ohsome.org/v1) for historical OSM tag values at the precise timestamp of each event
-(see [docs/external-enrichments.md](docs/external-enrichments.md)).
+Geofabrik serves the **latest** state of OpenStreetMap. The road network in the routing graph therefore reflects today's
+infrastructure, not the infrastructure as it existed when the rides were recorded. The Ohsome enrichment therefore uses
+historical, month-start OSM snapshots from the [ohsome API v2](https://api.heigit.org/ohsome-api-staging/v2/docs).
+Missing GeoParquet snapshots are downloaded once, checksummed, and cached under `./data/ohsome`; enrichment then runs
+locally by matching each distinct street-segment/month pair against the corresponding snapshot. See
+[docs/external-enrichments.md](docs/external-enrichments.md) for the temporal approximation and matching rules.
 
 ### Key config properties
 
@@ -98,7 +99,7 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `pipeline.import.enabled` | `false` | Enable SimRa ride import |
 | `pipeline.enrichment.weather.enabled` | `true` | Enable Open-Meteo enrichment |
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
-| `pipeline.enrichment.ohsome.enabled` | `true` | Enable Ohsome OSM enrichment (rate-limited) |
+| `pipeline.enrichment.ohsome.enabled` | `true` | Enable cached monthly Ohsome v2 enrichment |
 | `pipeline.enrichment.berlin-open-data.enabled` | `true` | Enable VIZ Berlin road-closure enrichment |
 | `tiles.auto-rebuild.enabled` | `true` | Automatically rebuild stale tiles after pipeline work becomes idle |
 | `tiles.auto-rebuild.quiet-period-ms` | `900000` | Required pipeline idle time before an automatic tile build |
@@ -111,6 +112,7 @@ data/
 ├── graphhopper-cache/         # Built routing graph (auto-generated)
 ├── elevation-cache/           # Elevation tiles (auto-downloaded)
 ├── tiles/                     # Generated PMTiles vector tiles
+├── ohsome/v2/                 # Cached historical GeoParquet snapshots and manifest
 ├── berlinTraffic/cache/       # Monthly traffic measurement archives (auto-downloaded)
 ├── berlinOpenData/cache/      # VIZ road closures / construction JSON (auto-downloaded)
 ├── berlinOpenData/historical/ # Private historical VIZ snapshots, grouped by year
@@ -133,7 +135,7 @@ SimRa CSV files
   ├── Weather (Open-Meteo)
   ├── Traffic (Berlin detectors)
   ├── Road closures (Berlin Open Data)
-  └── OSM attributes (Ohsome API)
+  └── OSM attributes (cached monthly Ohsome v2 snapshots)
       │
       ▼
 [Tile Builder]  on demand

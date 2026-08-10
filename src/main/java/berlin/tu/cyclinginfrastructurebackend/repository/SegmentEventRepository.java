@@ -1,8 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayLocation;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
@@ -81,35 +79,6 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     @Transactional
     @Query("""
             UPDATE SegmentEvent se
-            SET se.ohsomeEnriched = true,
-                se.ohsomeProcessingStatus = :status,
-                se.surface = :surface,
-                se.smoothness = :smoothness,
-                se.lit = :lit,
-                se.highway = :highway,
-                se.cyclewayType = :cyclewayType,
-                se.cyclewayLocation = :cyclewayLocation,
-                se.cyclewaySurface = :cyclewaySurface,
-                se.cyclewayWidth = :cyclewayWidth,
-                se.bicycleOneway = :bicycleOneway
-            WHERE se.id = :eventId
-            """)
-    int markOhsomeEnriched(UUID eventId,
-                           EnrichmentStatus status,
-                           String surface,
-                           String smoothness,
-                           String lit,
-                           String highway,
-                           CyclewayType cyclewayType,
-                           CyclewayLocation cyclewayLocation,
-                           String cyclewaySurface,
-                           Double cyclewayWidth,
-                           Boolean bicycleOneway);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("""
-            UPDATE SegmentEvent se
             SET se.trafficEnriched = true,
                 se.trafficProcessingStatus = :status,
                 se.trafficVolumeKfz = :trafficVolumeKfz,
@@ -144,11 +113,6 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     @Transactional
     @Query("UPDATE SegmentEvent se SET se.berlinOpenDataProcessingStatus = :status WHERE se.id = :eventId")
     int updateBerlinOpenDataProcessingStatus(UUID eventId, EnrichmentStatus status);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("UPDATE SegmentEvent se SET se.ohsomeProcessingStatus = :status WHERE se.id = :eventId")
-    int updateOhsomeProcessingStatus(UUID eventId, EnrichmentStatus status);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
