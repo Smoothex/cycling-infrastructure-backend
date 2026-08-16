@@ -84,9 +84,9 @@ The detector metadata (station locations, road names, directions) is downloaded 
 
 **Source:** VIZ (Verkehrsinformationszentrale Berlin) live dataset `https://api.viz.berlin.de/daten/baustellen_sperrungen_viz.json` (dataset description: [Baustellen, Sperrungen und sonstige Störungen von besonderem verkehrlichem Interesse](https://daten.berlin.de/datensaetze/baustellen-sperrungen-und-sonstige-storungen-von-besonderem-verkehrlichem-interesse))
 
-Downloads the VIZ JSON containing road closures and construction zones automatically at startup. For each segment event, a spatial check determines whether the event's location overlaps with any active closure at the time of the ride.
+Downloads the VIZ JSON containing road closures and construction zones automatically at startup. For each segment event, a spatial check determines whether the event's location overlaps with any disruption active at the exact event timestamp. Validity bounds are inclusive.
 
-Events near a closure are flagged with `ExternalFactorType.ROAD_CLOSURE`. This helps distinguish infrastructure avoidance from temporary disruptions.
+Matching construction, closure, event, hazard, and incident records are persisted as segment external factors. `GET /api/segments/{id}/events` attaches every matching factor to the corresponding event through its `roadDisruptions` array. This helps distinguish infrastructure avoidance from temporary disruptions.
 
 Each successful download refreshes a local cache file; if the API is unreachable at startup, the cached copy from the previous run is used. If neither is available, road-closure enrichment is disabled for that run.
 
@@ -114,6 +114,18 @@ Property names here use `berlin-open-data` for historical reasons — they confi
 | `enrichment.berlin-open-data.cache-file` | `./data/berlinOpenData/cache/baustellen_sperrungen_viz.json` |
 | `pipeline.enrichment.berlin-open-data.delay-ms` | `60000` |
 | `enrichment.road-closures.refresh-ms` | `86400000` (import/refresh cadence, separate from the enrichment batch scheduler above) |
+
+Existing databases whose events were already marked as enriched before the
+historical archive was loaded require a one-time requeue:
+
+```sql
+UPDATE segment_events
+SET berlin_open_data_enriched = false,
+    berlin_open_data_processing_status = 'PENDING';
+```
+
+The scheduler then rebuilds the missing segment-factor correlations in bounded
+batches. Existing factors are retained and deduplicated.
 
 ---
 

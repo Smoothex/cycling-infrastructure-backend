@@ -408,6 +408,22 @@ public class ApiAnalyticsService {
         if (flags.measured()) {
             jpql.append(" AND e.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED");
         }
+        if (flags.roadDisruptionAffected()) {
+            jpql.append("""
+                     AND EXISTS (
+                         SELECT f.id FROM SegmentExternalFactor f
+                         WHERE f.segment = e.segment
+                           AND f.source = 'berlin-open-data'
+                           AND f.factorType IN (
+                               berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.CONSTRUCTION,
+                               berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.ROAD_CLOSURE,
+                               berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.EVENT,
+                               berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.HAZARD,
+                               berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.INCIDENT)
+                           AND f.validFrom <= e.eventTimestamp
+                           AND (f.validTo IS NULL OR f.validTo >= e.eventTimestamp))
+                    """);
+        }
     }
 
     private void bindFilters(Query query, Long from, Long to, SegmentEventType eventType,
@@ -429,13 +445,15 @@ public class ApiAnalyticsService {
         }
     }
 
-    record EnrichmentFlags(boolean weather, boolean ohsome, boolean traffic, boolean measured) {
+    record EnrichmentFlags(boolean weather, boolean ohsome, boolean traffic, boolean measured,
+                           boolean roadDisruptionAffected) {
         static EnrichmentFlags of(List<SegmentEnrichmentFilter> filters) {
             return new EnrichmentFlags(
                     filters != null && filters.contains(SegmentEnrichmentFilter.WEATHER_ENRICHED),
                     filters != null && filters.contains(SegmentEnrichmentFilter.OHSOME_ENRICHED),
                     filters != null && filters.contains(SegmentEnrichmentFilter.TRAFFIC_ENRICHED),
-                    filters != null && filters.contains(SegmentEnrichmentFilter.TRAFFIC_MEASURED));
+                    filters != null && filters.contains(SegmentEnrichmentFilter.TRAFFIC_MEASURED),
+                    filters != null && filters.contains(SegmentEnrichmentFilter.ROAD_DISRUPTION_AFFECTED));
         }
     }
 

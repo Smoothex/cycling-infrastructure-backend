@@ -1,7 +1,9 @@
 package berlin.tu.cyclinginfrastructurebackend.service.dto.api;
 
 import berlin.tu.cyclinginfrastructurebackend.domain.SegmentEvent;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.SegmentSummaryDto.ExternalFactorDto;
 
+import java.util.List;
 import java.util.UUID;
 
 public record SegmentEventDto(
@@ -42,10 +44,15 @@ public record SegmentEventDto(
         Integer trafficVolumePkw,
         Double trafficSpeedPkw,
         Integer trafficVolumeLkw,
-        Double trafficSpeedLkw
+        Double trafficSpeedLkw,
+        List<ExternalFactorDto> roadDisruptions
 ) {
 
     public static SegmentEventDto from(SegmentEvent event) {
+        return from(event, List.of());
+    }
+
+    public static SegmentEventDto from(SegmentEvent event, List<ExternalFactorDto> roadDisruptions) {
         return new SegmentEventDto(
                 event.getId(),
                 event.getSegment().getId(),
@@ -84,7 +91,8 @@ public record SegmentEventDto(
                 event.getTrafficVolumePkw(),
                 event.getTrafficSpeedPkw(),
                 event.getTrafficVolumeLkw(),
-                event.getTrafficSpeedLkw()
+                event.getTrafficSpeedLkw(),
+                List.copyOf(roadDisruptions)
         );
     }
 }

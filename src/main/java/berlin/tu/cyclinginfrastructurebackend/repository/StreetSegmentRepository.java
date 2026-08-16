@@ -97,6 +97,13 @@ public interface StreetSegmentRepository
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
                       AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:roadDisruptionAffected = false OR EXISTS (
+                            SELECT 1 FROM segment_external_factors f
+                            WHERE f.segment_id = e.segment_id
+                              AND f.source = 'berlin-open-data'
+                              AND f.factor_type IN ('CONSTRUCTION', 'ROAD_CLOSURE', 'EVENT', 'HAZARD', 'INCIDENT')
+                              AND f.valid_from <= e.event_timestamp
+                              AND (f.valid_to IS NULL OR f.valid_to >= e.event_timestamp)))
                       AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
                       AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
             ORDER BY s.avoidance_ratio DESC
@@ -112,6 +119,7 @@ public interface StreetSegmentRepository
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            boolean roadDisruptionAffected,
             String rideIntent,
             String trafficCondition,
             int limit
@@ -140,6 +148,13 @@ public interface StreetSegmentRepository
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
                       AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:roadDisruptionAffected = false OR EXISTS (
+                            SELECT 1 FROM segment_external_factors f
+                            WHERE f.segment_id = e.segment_id
+                              AND f.source = 'berlin-open-data'
+                              AND f.factor_type IN ('CONSTRUCTION', 'ROAD_CLOSURE', 'EVENT', 'HAZARD', 'INCIDENT')
+                              AND f.valid_from <= e.event_timestamp
+                              AND (f.valid_to IS NULL OR f.valid_to >= e.event_timestamp)))
                       AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
                       AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
             ORDER BY GREATEST(COALESCE(s.avoidance_ratio, 0), COALESCE(s.preference_ratio, 0)) DESC,
@@ -157,6 +172,7 @@ public interface StreetSegmentRepository
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            boolean roadDisruptionAffected,
             String rideIntent,
             String trafficCondition,
             int limit
@@ -179,6 +195,13 @@ public interface StreetSegmentRepository
                       AND (:ohsomeEnriched = false OR e.ohsome_enriched)
                       AND (:trafficEnriched = false OR e.traffic_enriched)
                       AND (:trafficMeasured = false OR e.traffic_enrichment_status = 'ENRICHED')
+                      AND (:roadDisruptionAffected = false OR EXISTS (
+                            SELECT 1 FROM segment_external_factors f
+                            WHERE f.segment_id = e.segment_id
+                              AND f.source = 'berlin-open-data'
+                              AND f.factor_type IN ('CONSTRUCTION', 'ROAD_CLOSURE', 'EVENT', 'HAZARD', 'INCIDENT')
+                              AND f.valid_from <= e.event_timestamp
+                              AND (f.valid_to IS NULL OR f.valid_to >= e.event_timestamp)))
                       AND (:rideIntent = '' OR e.ride_intent = :rideIntent)
                       AND (:trafficCondition = '' OR e.traffic_condition = :trafficCondition)))
               AND ST_Intersects(
@@ -199,6 +222,7 @@ public interface StreetSegmentRepository
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            boolean roadDisruptionAffected,
             String rideIntent,
             String trafficCondition,
             double minLon,

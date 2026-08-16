@@ -26,8 +26,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @RestController
@@ -37,6 +39,21 @@ public class SegmentController {
     private static final double DEFAULT_INCIDENT_RADIUS_METERS = 25.0;
     private static final int MAX_MAP_LIMIT = 10000;
     private static final int MAX_EVENT_LIMIT = 1000;
+    private static final String ROAD_DISRUPTION_SOURCE = "berlin-open-data";
+    private static final Set<ExternalFactorType> ROAD_DISRUPTION_TYPES = Set.of(
+            ExternalFactorType.CONSTRUCTION,
+            ExternalFactorType.ROAD_CLOSURE,
+            ExternalFactorType.EVENT,
+            ExternalFactorType.HAZARD,
+            ExternalFactorType.INCIDENT
+    );
+    private static final Comparator<SegmentExternalFactor> ROAD_DISRUPTION_ORDER = Comparator
+            .comparing(SegmentExternalFactor::getValidFrom)
+            .thenComparing(factor -> factor.getFactorType().name())
+            .thenComparing(SegmentController::externalFactorIdentifier,
+                    Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(SegmentExternalFactor::getId,
+                    Comparator.nullsLast(Comparator.naturalOrder()));
 
     private final StreetSegmentRepository segmentRepository;
     private final IncidentRepository incidentRepository;
@@ -85,6 +102,7 @@ public class SegmentController {
                     criteria.ohsomeEnriched(),
                     criteria.trafficEnriched(),
                     criteria.trafficMeasured(),
+                    criteria.roadDisruptionAffected(),
                     criteria.rideIntent(),
                     criteria.trafficCondition(),
                     parsedBbox.minLon(),
@@ -105,6 +123,7 @@ public class SegmentController {
                     criteria.ohsomeEnriched(),
                     criteria.trafficEnriched(),
                     criteria.trafficMeasured(),
+                    criteria.roadDisruptionAffected(),
                     criteria.rideIntent(),
                     criteria.trafficCondition(),
                     safeLimit
@@ -148,6 +167,7 @@ public class SegmentController {
                 criteria.ohsomeEnriched(),
                 criteria.trafficEnriched(),
                 criteria.trafficMeasured(),
+                criteria.roadDisruptionAffected(),
                 criteria.rideIntent(),
                 criteria.trafficCondition(),
                 limitToRange(limit, 1, MAX_MAP_LIMIT));
@@ -220,14 +240,53 @@ public class SegmentController {
                 hasFilter(enrichmentFilters, SegmentEnrichmentFilter.OHSOME_ENRICHED),
                 hasFilter(enrichmentFilters, SegmentEnrichmentFilter.TRAFFIC_ENRICHED),
                 hasFilter(enrichmentFilters, SegmentEnrichmentFilter.TRAFFIC_MEASURED),
+                hasFilter(enrichmentFilters, SegmentEnrichmentFilter.ROAD_DISRUPTION_AFFECTED),
                 rideIntent,
                 trafficCondition,
                 PageRequest.of(0, limitToRange(limit, 1, MAX_EVENT_LIMIT))
         );
 
+        if (events.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
+
+        long earliestEventTimestamp = events.stream()
+                .mapToLong(SegmentEvent::getEventTimestamp)
+                .min()
+                .orElseThrow();
+        long latestEventTimestamp = events.stream()
+                .mapToLong(SegmentEvent::getEventTimestamp)
+                .max()
+                .orElseThrow();
+        List<SegmentExternalFactor> disruptionCandidates = segmentExternalFactorRepository
+                .findDisruptionsOverlapping(
+                        id,
+                        ROAD_DISRUPTION_SOURCE,
+                        ROAD_DISRUPTION_TYPES,
+                        earliestEventTimestamp,
+                        latestEventTimestamp
+                );
+
         return ResponseEntity.ok(events.stream()
-                .map(SegmentEventDto::from)
+                .map(event -> SegmentEventDto.from(event, disruptionCandidates.stream()
+                        .filter(factor -> overlapsTimestamp(factor, event.getEventTimestamp()))
+                        .sorted(ROAD_DISRUPTION_ORDER)
+                        .map(this::toFactorDto)
+                        .toList()))
                 .toList());
+    }
+
+    private static boolean overlapsTimestamp(SegmentExternalFactor factor, long timestamp) {
+        return factor.getValidFrom() <= timestamp
+                && (factor.getValidTo() == null || factor.getValidTo() >= timestamp);
+    }
+
+    private static String externalFactorIdentifier(SegmentExternalFactor factor) {
+        if (factor.getMetadata() == null) {
+            return null;
+        }
+        Object identifier = factor.getMetadata().get("id");
+        return identifier != null ? identifier.toString() : null;
     }
 
     private SegmentSummaryDto toSummary(StreetSegment segment, SegmentTrafficStatsDto trafficStats) {
@@ -323,6 +382,7 @@ public class SegmentController {
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            boolean roadDisruptionAffected,
             String rideIntent,
             String trafficCondition
     ) {
@@ -333,9 +393,11 @@ public class SegmentController {
             boolean ohsomeEnriched = has(filters, SegmentEnrichmentFilter.OHSOME_ENRICHED);
             boolean trafficEnriched = has(filters, SegmentEnrichmentFilter.TRAFFIC_ENRICHED);
             boolean trafficMeasured = has(filters, SegmentEnrichmentFilter.TRAFFIC_MEASURED);
+            boolean roadDisruptionAffected = has(filters, SegmentEnrichmentFilter.ROAD_DISRUPTION_AFFECTED);
             return new EventCriteria(
                     from != null || to != null
                             || weatherEnriched || ohsomeEnriched || trafficEnriched || trafficMeasured
+                            || roadDisruptionAffected
                             || rideIntent != null || trafficCondition != null,
                     from != null ? from : 0L,
                     to != null ? to : Long.MAX_VALUE,
@@ -343,6 +405,7 @@ public class SegmentController {
                     ohsomeEnriched,
                     trafficEnriched,
                     trafficMeasured,
+                    roadDisruptionAffected,
                     rideIntent != null ? rideIntent.name() : "",
                     trafficCondition != null ? trafficCondition.name() : ""
             );
