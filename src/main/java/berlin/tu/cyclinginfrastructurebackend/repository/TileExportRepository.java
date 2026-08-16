@@ -137,14 +137,22 @@ public class TileExportRepository {
     private static String segmentFeaturesSql(List<Integer> years) {
         return """
                 WITH enrichment AS (
-                    SELECT segment_id,
-                           COUNT(*) FILTER (WHERE traffic_enriched)                          AS traffic_enriched_count,
-                           COUNT(*) FILTER (WHERE weather_enriched)                          AS weather_enriched_count,
-                           COUNT(*) FILTER (WHERE ohsome_enriched)                           AS ohsome_enriched_count,
-                           COUNT(*) FILTER (WHERE traffic_enrichment_status = 'ENRICHED')    AS traffic_measured_count
+                    SELECT e.segment_id,
+                           COUNT(*) FILTER (WHERE e.traffic_enriched)                       AS traffic_enriched_count,
+                           COUNT(*) FILTER (WHERE e.weather_enriched)                       AS weather_enriched_count,
+                           COUNT(*) FILTER (WHERE e.ohsome_enriched)                        AS ohsome_enriched_count,
+                           COUNT(*) FILTER (WHERE e.traffic_enrichment_status = 'ENRICHED') AS traffic_measured_count,
+                           COUNT(*) FILTER (WHERE EXISTS (
+                               SELECT 1 FROM segment_external_factors f
+                               WHERE f.segment_id = e.segment_id
+                                 AND f.source = 'berlin-open-data'
+                                 AND f.factor_type IN ('CONSTRUCTION', 'ROAD_CLOSURE', 'EVENT', 'HAZARD', 'INCIDENT')
+                                 AND f.valid_from <= e.event_timestamp
+                                 AND (f.valid_to IS NULL OR f.valid_to >= e.event_timestamp)
+                           )) AS road_disruption_affected_count
                 """ + yearEnrichmentCounts(years) + """
-                    FROM segment_events
-                    GROUP BY segment_id
+                    FROM segment_events e
+                    GROUP BY e.segment_id
                 ),
                 seg AS (
                     SELECT s.id,
@@ -163,7 +171,8 @@ public class TileExportRepository {
                            COALESCE(e.traffic_enriched_count, 0) AS traffic_enriched_count,
                            COALESCE(e.weather_enriched_count, 0) AS weather_enriched_count,
                            COALESCE(e.ohsome_enriched_count, 0)  AS ohsome_enriched_count,
-                           COALESCE(e.traffic_measured_count, 0) AS traffic_measured_count
+                           COALESCE(e.traffic_measured_count, 0) AS traffic_measured_count,
+                           COALESCE(e.road_disruption_affected_count, 0) AS road_disruption_affected_count
                 """ + yearSegColumns(years) + """
                     FROM street_segments s
                     LEFT JOIN enrichment e ON e.segment_id = s.id
@@ -190,7 +199,8 @@ public class TileExportRepository {
                         'trafficEnrichedEventCount', traffic_enriched_count,
                         'weatherEnrichedEventCount', weather_enriched_count,
                         'ohsomeEnrichedEventCount', ohsome_enriched_count,
-                        'trafficMeasuredEventCount', traffic_measured_count
+                        'trafficMeasuredEventCount', traffic_measured_count,
+                        'roadDisruptionAffectedEventCount', road_disruption_affected_count
                 """ + yearProperties(years) + """
                     ))
                 )::text AS feature

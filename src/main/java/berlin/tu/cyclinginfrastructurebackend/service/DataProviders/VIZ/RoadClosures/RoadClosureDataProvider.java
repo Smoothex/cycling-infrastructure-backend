@@ -31,7 +31,7 @@ import java.util.Map;
  * <p>
  * On each {@link #enrichSegment} the STRtree is queried by the street segment's bounding box,
  * then candidates are filtered by spatial proximity and temporal
- * overlap with the avoidance time window.
+ * overlap with the supplied event time range.
  */
 @Component
 public class RoadClosureDataProvider implements ExternalDataProvider {

@@ -15,7 +15,7 @@ CORS is configured via `app.cors.allowed-origins` (defaults: `localhost:4200`, `
 **`GET /api/segments`**  
 Returns segments ranked by avoidance ratio, with optional filtering. Used to surface the most problematic infrastructure.
 
-Params: `minAvoidanceRatio` (default `0.2`), `minSampleSize` (default `10`), `limit` (default `50`, clamped to `[1, 10000]`), `from`/`to` (epoch ms), `rideIntent`, `trafficCondition`, `enrichmentFilters` (repeatable, one or more of `TRAFFIC_ENRICHED`, `WEATHER_ENRICHED`, `OHSOME_ENRICHED`, `TRAFFIC_MEASURED`). The sample size and `totalObservationCount` are `usageCount + avoidanceCount`; preference observations are already included in usage and are not added again. When any event-level filter (`from`/`to`/`rideIntent`/`trafficCondition`/`enrichmentFilters`) is set, a segment qualifies if **at least one** of its events matches *all* of the active filters at once — filters are ANDed within an event, but a segment needs only one matching event, not all of them.
+Params: `minAvoidanceRatio` (default `0.2`), `minSampleSize` (default `10`), `limit` (default `50`, clamped to `[1, 10000]`), `from`/`to` (epoch ms), `rideIntent`, `trafficCondition`, `enrichmentFilters` (repeatable, one or more of `TRAFFIC_ENRICHED`, `WEATHER_ENRICHED`, `OHSOME_ENRICHED`, `TRAFFIC_MEASURED`, `ROAD_DISRUPTION_AFFECTED`). `ROAD_DISRUPTION_AFFECTED` matches events with a Berlin open-data disruption whose validity window contains the exact event timestamp. The sample size and `totalObservationCount` are `usageCount + avoidanceCount`; preference observations are already included in usage and are not added again. When any event-level filter (`from`/`to`/`rideIntent`/`trafficCondition`/`enrichmentFilters`) is set, a segment qualifies if **at least one** of its events matches *all* of the active filters at once — filters are ANDed within an event, but a segment needs only one matching event, not all of them.
 
 ```json
 {
@@ -135,7 +135,11 @@ Returns individual `SegmentEvent` records — each avoidance or preference obser
 
 Params: `eventType`, `from`/`to`, `rideIntent`, `trafficCondition`, `enrichmentFilters` (same values as `GET /api/segments`), `limit` (default `100`, clamped to `[1, 1000]`). Always returns a single page starting at offset 0 — there is no cursor/offset parameter, so a segment with more than 1000 matching events cannot be paged through this endpoint.
 
-Example of a fully enriched event (weather + traffic):
+Each event includes a `roadDisruptions` array. It contains every persisted VIZ
+factor for the segment whose inclusive validity range contains the exact event
+timestamp; it is empty when no disruption matched.
+
+Example of a fully enriched event (weather + traffic + road disruption):
 
 ```json
 {
@@ -176,7 +180,23 @@ Example of a fully enriched event (weather + traffic):
     "trafficVolumePkw": 574,
     "trafficSpeedPkw": 48.0,
     "trafficVolumeLkw": 21,
-    "trafficSpeedLkw": 49.0
+    "trafficSpeedLkw": 49.0,
+    "roadDisruptions": [
+        {
+            "factorType": "CONSTRUCTION",
+            "source": "berlin-open-data",
+            "validFrom": 1645800000000,
+            "validTo": 1645812000000,
+            "metadata": {
+                "id": "historical:123:1645800000000",
+                "severity": "DIRECTIONAL_CLOSURE",
+                "direction": "stadteinwärts",
+                "street": "Invalidenstraße",
+                "section": "zwischen A und B",
+                "content": "Fahrbahnerneuerung"
+            }
+        }
+    ]
 }
 ```
 

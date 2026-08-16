@@ -149,6 +149,18 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
               AND (:trafficEnriched = false OR se.trafficEnriched = true)
               AND (:trafficMeasured = false
                    OR se.trafficEnrichmentStatus = berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus.ENRICHED)
+              AND (:roadDisruptionAffected = false OR EXISTS (
+                    SELECT f.id FROM SegmentExternalFactor f
+                    WHERE f.segment = se.segment
+                      AND f.source = 'berlin-open-data'
+                      AND f.factorType IN (
+                           berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.CONSTRUCTION,
+                           berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.ROAD_CLOSURE,
+                           berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.EVENT,
+                           berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.HAZARD,
+                           berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType.INCIDENT)
+                      AND f.validFrom <= se.eventTimestamp
+                      AND (f.validTo IS NULL OR f.validTo >= se.eventTimestamp)))
               AND (:rideIntent IS NULL OR se.rideIntent = :rideIntent)
               AND (:trafficCondition IS NULL OR se.trafficCondition = :trafficCondition)
             ORDER BY se.eventTimestamp DESC
@@ -162,6 +174,7 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
             boolean ohsomeEnriched,
             boolean trafficEnriched,
             boolean trafficMeasured,
+            boolean roadDisruptionAffected,
             RideIntent rideIntent,
             TrafficCondition trafficCondition,
             Pageable pageable

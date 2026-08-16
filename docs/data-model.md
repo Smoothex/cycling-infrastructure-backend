@@ -148,6 +148,11 @@ Stores segment-level external conditions (weather events, road closures, constru
 
 A unique constraint on `(segment_id, factorType, source, validFrom)` prevents duplicate factor records. Indexed on `segment_id`, `factorType`, and `(validFrom, validTo)` — the last backs the `/api/segments/{id}/factors` overlap query.
 
+The segment-event API derives its `roadDisruptions` array from these rows at
+read time. A factor is attached when it belongs to the event's segment and its
+inclusive validity range contains the exact `eventTimestamp`; no event-factor
+join table is stored.
+
 ---
 
 ### `road_closures`

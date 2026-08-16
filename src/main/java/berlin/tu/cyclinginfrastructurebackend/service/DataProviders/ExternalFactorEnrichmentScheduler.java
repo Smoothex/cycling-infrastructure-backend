@@ -32,7 +32,6 @@ import java.util.stream.Collectors;
 public class ExternalFactorEnrichmentScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(ExternalFactorEnrichmentScheduler.class);
-    private static final long ONE_HOUR_MILLIS = 3_600_000L;
     private static final Duration RATE_LIMIT_INITIAL_BACKOFF = Duration.ofMinutes(1);
     private static final Duration RATE_LIMIT_MAX_BACKOFF = Duration.ofMinutes(30);
 
@@ -136,8 +135,11 @@ public class ExternalFactorEnrichmentScheduler {
                 () -> workClaimService.claimBerlinOpenDataEvents(berlinOpenDataBatchSize),
                 event -> {
                     StreetSegment segment = event.getSegment();
-                    long hourStart = event.getEventTimestamp() - (event.getEventTimestamp() % ONE_HOUR_MILLIS);
-                    roadClosureDataProvider.enrichSegment(segment, hourStart, hourStart + ONE_HOUR_MILLIS);
+                    roadClosureDataProvider.enrichSegment(
+                            segment,
+                            event.getEventTimestamp(),
+                            event.getEventTimestamp()
+                    );
                     segmentEventRepository.markBerlinOpenDataEnriched(event.getId(), EnrichmentStatus.DONE);
                 },
                 segmentEventRepository::updateBerlinOpenDataProcessingStatus,
