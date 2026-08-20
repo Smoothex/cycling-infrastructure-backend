@@ -97,7 +97,8 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `graphhopper.osm.file` | `./data/osm/germany-latest.osm.pbf` | OSM source file |
 | `graphhopper.osm.download-url` | Geofabrik Germany extract | Where the OSM file is fetched from if missing |
 | `pipeline.import.enabled` | `false` | Enable SimRa ride import |
-| `pipeline.enrichment.weather.enabled` | `true` | Enable Open-Meteo enrichment |
+| `pipeline.enrichment.weather.enabled` | `false` | Enable bulk Open-Meteo enrichment |
+| `pipeline.enrichment.weather.batch-size` | `5` | 0.1° grid/year locations per request |
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
 | `pipeline.enrichment.ohsome.enabled` | `true` | Enable cached monthly Ohsome v2 enrichment |
 | `pipeline.enrichment.berlin-open-data.enabled` | `true` | Enable VIZ Berlin road-closure enrichment |
@@ -149,3 +150,6 @@ Deep-dive documentation follows the pipeline order:
 - [docs/detour-analysis.md](docs/detour-analysis.md) - routing profiles, shortest-path comparison, avoidance/preference event creation, ride intent classification
 - [docs/external-enrichments.md](docs/external-enrichments.md) - weather, traffic, OSM, and road closure enrichment sources
 - [docs/data-export.md](docs/data-export.md) - REST API reference, vector tiles, PMTiles, Tippecanoe
+
+### Note:
+Artificial intelligence was used to generate the documentation and test suite of this project.

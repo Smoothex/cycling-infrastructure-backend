@@ -5,7 +5,8 @@ import berlin.tu.cyclinginfrastructurebackend.domain.StreetSegment;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeV2EnrichmentService;
-import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoBulkEnrichmentService;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoProperties;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.RoadClosures.RoadClosureDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.Traffic.TrafficDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
@@ -24,6 +25,29 @@ import static org.mockito.Mockito.when;
 class ExternalFactorEnrichmentSchedulerTest {
 
     @Test
+    void weatherEnrichmentInvokesExactlyOneBulkBatch() {
+        OpenMeteoBulkEnrichmentService weatherService = mock(OpenMeteoBulkEnrichmentService.class);
+        ExternalFactorEnrichmentScheduler scheduler = new ExternalFactorEnrichmentScheduler(
+                mock(SegmentEventRepository.class),
+                weatherService,
+                new OpenMeteoProperties(),
+                mock(RoadClosureDataProvider.class),
+                mock(OhsomeV2EnrichmentService.class),
+                mock(TrafficDataProvider.class),
+                mock(PipelineWorkClaimService.class),
+                mock(TileBuildService.class),
+                new PipelineActivityTracker()
+        );
+        ReflectionTestUtils.setField(scheduler, "pipelineEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "enrichmentEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "weatherEnabled", true);
+
+        scheduler.enrichWeatherPending();
+
+        verify(weatherService).processNextBatch();
+    }
+
+    @Test
     void roadDisruptionEnrichmentUsesTheExactEventTimestamp() {
         SegmentEventRepository eventRepository = mock(SegmentEventRepository.class);
         RoadClosureDataProvider roadClosureDataProvider = mock(RoadClosureDataProvider.class);
@@ -32,7 +56,8 @@ class ExternalFactorEnrichmentSchedulerTest {
 
         ExternalFactorEnrichmentScheduler scheduler = new ExternalFactorEnrichmentScheduler(
                 eventRepository,
-                mock(WeatherDataProvider.class),
+                mock(OpenMeteoBulkEnrichmentService.class),
+                new OpenMeteoProperties(),
                 roadClosureDataProvider,
                 mock(OhsomeV2EnrichmentService.class),
                 mock(TrafficDataProvider.class),

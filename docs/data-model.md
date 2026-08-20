@@ -103,8 +103,7 @@ One record per avoidance or preference observation. This is the primary analytic
 Note: `bikeType` appears in the REST API's event JSON (see [data-export.md](data-export.md)) but is not a `segment_events` column — it's read from the joined `Ride` at serialization time.
 
 Indexed on `segment_id`, `eventTimestamp`, `eventType`, and `cyclewayType` — the first three back the common per-segment/time-range/type lookups;
-the `cyclewayType` index backs the infrastructure-signals analytics query. A composite `ohsomeProcessingStatus,eventTimestamp,segment_id` 
-index supports the local Ohsome segment/month work queue.
+the `cyclewayType` index backs the infrastructure-signals analytics query. Composite weather and Ohsome status/timestamp/segment indices support their set-based work queues.
 
 **Enrichment status fields** (one pair per source):
 
@@ -124,6 +123,8 @@ For Ohsome, `DONE` means that the segment/month pair was evaluated successfully;
 
 `temperature2m`, `precipitation`, `windSpeed10m`, `windDirection10m`, `weatherCode`, `relativeWindAngleDegrees`, `windExposure` (`HEADWIND`, `CROSSWIND`, `TAILWIND`)
 
+`open_meteo_segment_grid` stores the permanent segment-centroid assignment as integer latitude/longitude tenths. `open_meteo_hourly_weather` stores the five raw weather fields with a composite primary key of `(latitude_tenths, longitude_tenths, valid_from)`. These tables are internal restart-safe caches; API weather data remains on `segment_events`.
+
 **Traffic fields** (populated after Berlin traffic detector enrichment):
 
 `trafficCondition` (`LIGHT`, `MODERATE`, `HEAVY`, `CONGESTED`), `trafficSourceType`, `trafficEnrichmentStatus`, `trafficVolumeKfz`, `trafficSpeedKfz`, `trafficVolumePkw`, `trafficSpeedPkw`, `trafficVolumeLkw`, `trafficSpeedLkw`
@@ -136,12 +137,12 @@ For Ohsome, `DONE` means that the segment/month pair was evaluated successfully;
 
 ### `segment_external_factors`
 
-Stores segment-level external conditions (weather events, road closures, construction) with a validity time window. This is separate from `segment_events` because these factors apply to a segment over a time range rather than to a single ride observation.
+Stores segment-level road disruptions with a validity time window. This is separate from `segment_events` because these factors apply to a segment over a time range rather than to a single ride observation. `WEATHER` and `TRAFFIC` remain enum values for compatibility but are not written by their current enrichment pipelines.
 
 | Field | Type | Description |
 |---|---|---|
 | `factorType` | enum | `WEATHER`, `CONSTRUCTION`, `ROAD_CLOSURE`, `TRAFFIC`, `EVENT`, `HAZARD`, `INCIDENT` |
-| `source` | string | Origin identifier, e.g. `"berlin-open-data"`, `"open-meteo"` |
+| `source` | string | Origin identifier, currently `"berlin-open-data"` |
 | `validFrom` / `validTo` | epoch ms | Time window when this factor was active |
 | `affectedArea` | Geometry (4326) | Optional spatial extent (e.g. construction site polygon) |
 | `metadata` | jsonb | Source-specific attributes without a fixed schema |

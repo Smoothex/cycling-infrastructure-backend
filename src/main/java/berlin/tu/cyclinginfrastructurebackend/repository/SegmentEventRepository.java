@@ -7,7 +7,6 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficEnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficSourceType;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.WindExposure;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -39,31 +38,6 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     long countByTrafficEnriched(boolean trafficEnriched);
 
     long countByTrafficProcessingStatus(EnrichmentStatus status);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("""
-            UPDATE SegmentEvent se
-            SET se.weatherEnriched = true,
-                se.weatherProcessingStatus = :status,
-                se.temperature2m = :temperature2m,
-                se.precipitation = :precipitation,
-                se.windSpeed10m = :windSpeed10m,
-                se.windDirection10m = :windDirection10m,
-                se.weatherCode = :weatherCode,
-                se.relativeWindAngleDegrees = :relativeWindAngleDegrees,
-                se.windExposure = :windExposure
-            WHERE se.id = :eventId
-            """)
-    int markWeatherEnriched(UUID eventId,
-                            EnrichmentStatus status,
-                            Double temperature2m,
-                            Double precipitation,
-                            Double windSpeed10m,
-                            Double windDirection10m,
-                            Integer weatherCode,
-                            Double relativeWindAngleDegrees,
-                            WindExposure windExposure);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
@@ -103,11 +77,6 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
                             TrafficSourceType trafficSourceType,
                             TrafficCondition trafficCondition,
                             TrafficEnrichmentStatus trafficEnrichmentStatus);
-
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Transactional
-    @Query("UPDATE SegmentEvent se SET se.weatherProcessingStatus = :status WHERE se.id = :eventId")
-    int updateWeatherProcessingStatus(UUID eventId, EnrichmentStatus status);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
