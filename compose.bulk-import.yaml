@@ -20,6 +20,8 @@ services:
       - "-c"
       - "max_connections=100"
       - "-c"
+      - "statement_timeout=10min"
+      - "-c"
       - "idle_in_transaction_session_timeout=35min"
       - "-c"
       - "shared_buffers=2GB"

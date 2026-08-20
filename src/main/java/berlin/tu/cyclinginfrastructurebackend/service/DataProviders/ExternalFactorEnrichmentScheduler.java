@@ -6,7 +6,9 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.RoadClosures.RoadClosureDataProvider;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.Traffic.TrafficDataProvider;
-import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.WeatherDataProvider;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoBulkEnrichmentService;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoProperties;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoRetryableException;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeV2EnrichmentService;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineWorkClaimService;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
@@ -32,6 +34,7 @@ import java.util.stream.Collectors;
 public class ExternalFactorEnrichmentScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(ExternalFactorEnrichmentScheduler.class);
+    private static final String WEATHER_LABEL = "Weather (Open Meteo API)";
     private static final Duration RATE_LIMIT_INITIAL_BACKOFF = Duration.ofMinutes(1);
     private static final Duration RATE_LIMIT_MAX_BACKOFF = Duration.ofMinutes(30);
 
@@ -41,7 +44,8 @@ public class ExternalFactorEnrichmentScheduler {
     private final Map<String, Integer> consecutiveRateLimits = new ConcurrentHashMap<>();
 
     private final SegmentEventRepository segmentEventRepository;
-    private final WeatherDataProvider weatherDataProvider;
+    private final OpenMeteoBulkEnrichmentService weatherEnrichmentService;
+    private final OpenMeteoProperties openMeteoProperties;
     private final RoadClosureDataProvider roadClosureDataProvider;
     private final OhsomeV2EnrichmentService ohsomeV2EnrichmentService;
     private final TrafficDataProvider trafficDataProvider;
@@ -57,12 +61,6 @@ public class ExternalFactorEnrichmentScheduler {
 
     @Value("${pipeline.enrichment.weather.enabled:false}")
     private boolean weatherEnabled;
-
-    @Value("${pipeline.enrichment.weather.batch-size:100}")
-    private int weatherBatchSize;
-
-    @Value("${pipeline.enrichment.weather.delay-between-calls-ms:150}")
-    private long weatherCallDelayMs;
 
     @Value("${pipeline.enrichment.berlin-open-data.enabled:false}")
     private boolean berlinOpenDataEnabled;
@@ -83,7 +81,8 @@ public class ExternalFactorEnrichmentScheduler {
     private int trafficBatchSize;
 
     public ExternalFactorEnrichmentScheduler(SegmentEventRepository segmentEventRepository,
-                                             WeatherDataProvider weatherDataProvider,
+                                             OpenMeteoBulkEnrichmentService weatherEnrichmentService,
+                                             OpenMeteoProperties openMeteoProperties,
                                              RoadClosureDataProvider roadClosureDataProvider,
                                              OhsomeV2EnrichmentService ohsomeV2EnrichmentService,
                                              TrafficDataProvider trafficDataProvider,
@@ -91,7 +90,8 @@ public class ExternalFactorEnrichmentScheduler {
                                              TileBuildService tileBuildService,
                                              PipelineActivityTracker pipelineActivityTracker) {
         this.segmentEventRepository = segmentEventRepository;
-        this.weatherDataProvider = weatherDataProvider;
+        this.weatherEnrichmentService = weatherEnrichmentService;
+        this.openMeteoProperties = openMeteoProperties;
         this.roadClosureDataProvider = roadClosureDataProvider;
         this.ohsomeV2EnrichmentService = ohsomeV2EnrichmentService;
         this.trafficDataProvider = trafficDataProvider;
@@ -104,26 +104,27 @@ public class ExternalFactorEnrichmentScheduler {
     public void enrichWeatherPending() {
         if (!isEnabled(weatherEnabled)) return;
 
-        runClaimedBatch(
-                "Weather (Open Meteo API)",
-                () -> workClaimService.claimWeatherEvents(weatherBatchSize),
-                event -> {
-                    weatherDataProvider.enrichEvent(event);
-                    segmentEventRepository.markWeatherEnriched(
-                            event.getId(),
-                            EnrichmentStatus.DONE,
-                            event.getTemperature2m(),
-                            event.getPrecipitation(),
-                            event.getWindSpeed10m(),
-                            event.getWindDirection10m(),
-                            event.getWeatherCode(),
-                            event.getRelativeWindAngleDegrees(),
-                            event.getWindExposure()
-                    );
-                },
-                segmentEventRepository::updateWeatherProcessingStatus,
-                weatherCallDelayMs
-        );
+        Instant pausedUntil = rateLimitPauseUntil.get(WEATHER_LABEL);
+        if (pausedUntil != null && Instant.now().isBefore(pausedUntil)) {
+            log.debug("{} enrichment paused until {} after a transient API failure.",
+                    WEATHER_LABEL, pausedUntil);
+            return;
+        }
+
+        try {
+            weatherEnrichmentService.processNextBatch();
+            consecutiveRateLimits.remove(WEATHER_LABEL);
+            rateLimitPauseUntil.remove(WEATHER_LABEL);
+        } catch (ApiRateLimitException exception) {
+            Instant resumeAt = pauseAfterRateLimit(WEATHER_LABEL, exception.getRetryAt());
+            log.warn("{} enrichment rate limited; paused until {}.", WEATHER_LABEL, resumeAt);
+        } catch (OpenMeteoRetryableException exception) {
+            Instant resumeAt = pauseAfterRateLimit(WEATHER_LABEL, null);
+            log.warn("{} enrichment failed transiently; paused until {}: {}",
+                    WEATHER_LABEL, resumeAt, exception.getMessage());
+        } catch (RuntimeException exception) {
+            log.error("{} enrichment batch failed: {}", WEATHER_LABEL, exception.getMessage(), exception);
+        }
     }
 
     @Scheduled(fixedDelayString = "${pipeline.enrichment.berlin-open-data.delay-ms:60000}")
@@ -277,9 +278,15 @@ public class ExternalFactorEnrichmentScheduler {
         } else {
             int attempt = consecutiveRateLimits.merge(label, 1, Integer::sum);
             long multiplier = 1L << Math.min(attempt - 1, 30);
-            Duration backoff = RATE_LIMIT_INITIAL_BACKOFF.multipliedBy(multiplier);
-            if (backoff.compareTo(RATE_LIMIT_MAX_BACKOFF) > 0) {
-                backoff = RATE_LIMIT_MAX_BACKOFF;
+            Duration initialBackoff = WEATHER_LABEL.equals(label)
+                    ? openMeteoProperties.getInitialRetryDelay()
+                    : RATE_LIMIT_INITIAL_BACKOFF;
+            Duration maximumBackoff = WEATHER_LABEL.equals(label)
+                    ? openMeteoProperties.getMaxRetryDelay()
+                    : RATE_LIMIT_MAX_BACKOFF;
+            Duration backoff = initialBackoff.multipliedBy(multiplier);
+            if (backoff.compareTo(maximumBackoff) > 0) {
+                backoff = maximumBackoff;
             }
             resumeAt = Instant.now().plus(backoff);
         }

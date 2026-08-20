@@ -1,6 +1,6 @@
 # External Data Enrichments
 
-Each segment event (avoidance or preference) can be enriched with contextual data from four sources. Enrichment runs as independent scheduled jobs. Weather and road-closure results can create `SegmentExternalFactor` records; traffic and Ohsome attributes are stored directly on `SegmentEvent`.
+Each segment event (avoidance or preference) can be enriched with contextual data from four sources. Enrichment runs as independent scheduled jobs. Weather, traffic, and Ohsome attributes are stored directly on `SegmentEvent`; road-closure results create `SegmentExternalFactor` records.
 
 The event-driven enrichment jobs generally share the same status pattern:
 1. Claim a batch of events with `enrichment_status = PENDING`
@@ -15,31 +15,38 @@ Ohsome uses a specialized segment/month batch described below so that one cached
 
 **Source:** `https://archive-api.open-meteo.com/v1/archive`
 
-Fetches hourly historical weather data for the location and timestamp of each event. The API is queried with the event's GPS coordinates and hour, returning:
+Fetches hourly historical weather data for the location and timestamp of each event. Segment centroids are permanently assigned to a 0.1° grid, stored as integer latitude/longitude tenths. Pending work is grouped by grid location and UTC year; each request covers up to five locations and the minimum/maximum UTC dates still missing from the database cache.
+
+Requests use `timezone=GMT` and `timeformat=unixtime` and return:
 
 - Temperature (°C)
 - Precipitation (mm)
 - Wind speed (km/h) and direction (°)
 - WMO weather code (rain, snow, fog, etc.)
 
-**Wind exposure classification** is derived from the angle between the wind direction and the cyclist's bearing at that edge:
+The normalized hourly response is cached in `open_meteo_hourly_weather` by grid location and UTC hour. Cached rows are reused across segments, events, retries, and restarts. Weather is written only to `segment_events`; this pipeline does not create `WEATHER` `SegmentExternalFactor` rows.
+
+**Wind exposure classification** is derived from the smallest angle between the meteorological wind-from direction and the cyclist's bearing:
 
 | Angle | Classification |
 |---|---|
-| 0–30° (tailwind) | `TAILWIND` |
-| 30–60° | `DIAGONAL_TAILWIND` |
-| 60–120° (crosswind) | `CROSSWIND` |
-| 120–150° | `DIAGONAL_HEADWIND` |
-| 150–180° (headwind) | `HEADWIND` |
+| 0–45° (inclusive) | `HEADWIND` |
+| >45° and <135° | `CROSSWIND` |
+| 135–180° (inclusive) | `TAILWIND` |
 
-**Rate limiting:** 150 ms delay between API calls (`pipeline.enrichment.weather.delay-between-calls-ms`).
+The relative angle and classification are both null when either bearing or wind direction is unavailable.
+
+Before each request, cached hours finalize matching events. Transient 429, timeout, I/O, and server failures release unresolved events to `PENDING` and apply exponential backoff. Non-retryable 4xx and structurally invalid successful responses mark unresolved claimed events `ERROR`; a valid response missing an individual event hour marks only that event `ERROR`.
 
 | Property | Default |
 |---|---|
-| `pipeline.enrichment.weather.enabled` | `true` |
-| `pipeline.enrichment.weather.batch-size` | `100` |
+| `pipeline.enrichment.weather.enabled` | `false` |
+| `pipeline.enrichment.weather.batch-size` | `5` grid/year locations |
 | `pipeline.enrichment.weather.delay-ms` | `60000` |
-| `pipeline.enrichment.weather.delay-between-calls-ms` | `150` |
+| `pipeline.enrichment.weather.initial-retry-delay` | `PT1M` |
+| `pipeline.enrichment.weather.max-retry-delay` | `PT30M` |
+| `pipeline.enrichment.weather.connect-timeout` | `PT30S` |
+| `pipeline.enrichment.weather.request-timeout` | `PT2M` |
 
 ---
 
@@ -197,11 +204,11 @@ Note: `maxspeed` is **not** fetched or stored despite earlier versions of this d
 
 ## `SegmentExternalFactor.factorType` by producer
 
-`segment_external_factors` (see [data-model.md](data-model.md)) has one `factorType` enum shared across sources; only two of the four enrichment jobs above actually write `SegmentExternalFactor` rows:
+`segment_external_factors` (see [data-model.md](data-model.md)) has one `factorType` enum shared across sources. Only the road-disruption enrichment currently writes these rows:
 
 | `factorType` | Written by |
 |---|---|
-| `WEATHER` | Weather (Open-Meteo) — always this value |
+| `WEATHER` | Reserved for compatibility; no longer written by weather enrichment |
 | `CONSTRUCTION`, `ROAD_CLOSURE`, `EVENT`, `HAZARD`, `INCIDENT` | VIZ Road Closures, via the feed's `subtype` → `factorType` mapping on `RoadClosure` (see the `road_closures` entity in [data-model.md](data-model.md)) |
 | `TRAFFIC` | Not currently written by any source. Traffic measurements are stored directly on the `segment_events` traffic fields (see [data-model.md](data-model.md)), not as a `SegmentExternalFactor` — this enum value is reserved but unused today. |
 

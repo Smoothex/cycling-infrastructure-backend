@@ -59,11 +59,6 @@ public class PipelineWorkClaimService {
     }
 
     @Transactional
-    public List<UUID> claimWeatherEvents(int batchSize) {
-        return claimSegmentEvents("weather_processing_status", batchSize);
-    }
-
-    @Transactional
     public List<UUID> claimBerlinOpenDataEvents(int batchSize) {
         return claimSegmentEvents("berlin_open_data_processing_status", batchSize);
     }

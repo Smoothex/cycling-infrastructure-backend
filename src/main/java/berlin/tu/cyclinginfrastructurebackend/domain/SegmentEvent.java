@@ -31,6 +31,8 @@ import java.util.UUID;
         @Index(name = "idx_event_timestamp", columnList = "eventTimestamp"),
         @Index(name = "idx_event_type", columnList = "eventType"),
         @Index(name = "idx_cycleway_type", columnList = "cyclewayType"),
+        @Index(name = "idx_event_weather_work",
+                columnList = "weatherProcessingStatus,eventTimestamp,segment_id"),
         @Index(name = "idx_event_ohsome_work",
                 columnList = "ohsomeProcessingStatus,eventTimestamp,segment_id")
 })

@@ -201,23 +201,20 @@ Example of a fully enriched event (weather + traffic + road disruption):
 ```
 
 **`GET /api/segments/{id}/factors`**  
-Returns `SegmentExternalFactor` records — segment-level conditions with validity time windows. `404` if the segment doesn't exist.
+Returns road-disruption `SegmentExternalFactor` records with validity time windows. Weather remains available through segment-event fields and is not written as an external factor. `404` if the segment doesn't exist.
 
 Params: `factorType` (optional), `from`/`to` (optional). The three are mutually exclusive in effect, checked in this order: if **both** `from` and `to` are set, returns factors whose validity window overlaps `[from, to]`; else if `factorType` is set, returns factors of that type only; else returns all factors for the segment. Setting only one of `from`/`to` (not both) does not filter by time at all — it silently falls through to the `factorType`/all-factors branch.
 
 ```json
 [
     {
-        "factorType": "WEATHER",
-        "source": "open-meteo",
+        "factorType": "CONSTRUCTION",
+        "source": "berlin-open-data",
         "validFrom": 1646024400000,
-        "validTo": 1646028000000,
+        "validTo": 1646035200000,
         "metadata": {
-            "weather_code": 3,
-            "precipitation": 0.0,
-            "temperature_2m": -1.6,
-            "wind_speed_10m": 6.5,
-            "wind_direction_10m": 124.0
+            "street": "Invalidenstraße",
+            "content": "Fahrbahnerneuerung"
         }
     }
 ]
