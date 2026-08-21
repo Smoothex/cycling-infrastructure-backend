@@ -1,5 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoClaim;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoGridYear;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoHourlyRow;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoLocation;
@@ -12,7 +13,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /** Set-based persistence and claiming for bulk Open-Meteo enrichment. */
@@ -46,7 +48,7 @@ public class OpenMeteoWeatherBatchRepository {
                 """, Boolean.class));
     }
 
-    /** Creates immutable segment-to-grid assignments from valid WGS84 centroids. */
+    /** Creates immutable segment-to-grid assignments from usable WGS84 centroids. */
     @Transactional
     public int populateMissingSegmentGrids() {
         return jdbcTemplate.update("""
@@ -69,7 +71,6 @@ public class OpenMeteoWeatherBatchRepository {
                       )
                   AND s.geometry IS NOT NULL
                   AND NOT ST_IsEmpty(s.geometry)
-                  AND ST_IsValid(s.geometry)
                   AND ST_SRID(s.geometry) = 4326
                   AND ST_Y(c.centroid) BETWEEN -90 AND 90
                   AND ST_X(c.centroid) BETWEEN -180 AND 180
@@ -94,9 +95,9 @@ public class OpenMeteoWeatherBatchRepository {
                 """.formatted(CLEAR_WEATHER_FIELDS));
     }
 
-    /** Claims every event for up to {@code batchSize} locations in the earliest pending UTC year. */
+    /** Claims a bounded number of events from up to {@code locationBatchSize} locations. */
     @Transactional
-    public List<OpenMeteoGridYear> claimNextBatch(int batchSize) {
+    public Optional<OpenMeteoClaim> claimNextBatch(int locationBatchSize, int eventBatchSize) {
         Long earliestTimestamp = jdbcTemplate.queryForObject("""
                 SELECT MIN(e.event_timestamp)
                 FROM segment_events e
@@ -105,12 +106,13 @@ public class OpenMeteoWeatherBatchRepository {
                   AND e.event_timestamp IS NOT NULL
                 """, Long.class);
         if (earliestTimestamp == null) {
-            return List.of();
+            return Optional.empty();
         }
 
         int year = Instant.ofEpochMilli(earliestTimestamp).atZone(ZoneOffset.UTC).getYear();
         OpenMeteoGridYear yearBounds = new OpenMeteoGridYear(0, 0, year);
-        return jdbcTemplate.query("""
+        UUID batchId = UUID.randomUUID();
+        List<ClaimedGridCount> claimedGrids = jdbcTemplate.query("""
                 WITH selected_locations AS MATERIALIZED (
                     SELECT g.latitude_tenths, g.longitude_tenths
                     FROM segment_events e
@@ -121,42 +123,74 @@ public class OpenMeteoWeatherBatchRepository {
                     GROUP BY g.latitude_tenths, g.longitude_tenths
                     ORDER BY g.latitude_tenths, g.longitude_tenths
                     LIMIT ?
-                ), claimed AS (
-                    UPDATE segment_events e
-                    SET weather_processing_status = 'PROCESSING'
-                    FROM open_meteo_segment_grid g
+                ), candidate_events AS MATERIALIZED (
+                    SELECT e.id, g.latitude_tenths, g.longitude_tenths
+                    FROM segment_events e
+                    JOIN open_meteo_segment_grid g ON g.segment_id = e.segment_id
                     JOIN selected_locations selected
                       ON selected.latitude_tenths = g.latitude_tenths
                      AND selected.longitude_tenths = g.longitude_tenths
-                    WHERE e.segment_id = g.segment_id
-                      AND e.weather_processing_status = 'PENDING'
+                    WHERE e.weather_processing_status = 'PENDING'
                       AND e.event_timestamp >= ?
                       AND e.event_timestamp < ?
-                    RETURNING g.latitude_tenths, g.longitude_tenths
+                    ORDER BY e.event_timestamp, e.id
+                    LIMIT ?
+                    FOR UPDATE OF e SKIP LOCKED
+                ), claimed AS (
+                    UPDATE segment_events e
+                    SET weather_processing_status = 'PROCESSING',
+                        weather_processing_batch_id = ?
+                    FROM candidate_events candidate
+                    WHERE e.id = candidate.id
+                      AND e.weather_processing_status = 'PENDING'
+                    RETURNING candidate.latitude_tenths, candidate.longitude_tenths
                 )
-                SELECT latitude_tenths, longitude_tenths
+                SELECT latitude_tenths, longitude_tenths, COUNT(*)::integer AS event_count
                 FROM claimed
                 GROUP BY latitude_tenths, longitude_tenths
                 ORDER BY latitude_tenths, longitude_tenths
-                """, (resultSet, rowNum) -> new OpenMeteoGridYear(
-                        resultSet.getInt(1), resultSet.getInt(2), year),
+                """, (resultSet, rowNum) -> new ClaimedGridCount(
+                        new OpenMeteoGridYear(resultSet.getInt(1), resultSet.getInt(2), year),
+                        resultSet.getInt(3)),
                 yearBounds.yearStartMillis(),
                 yearBounds.nextYearStartMillis(),
-                Math.max(1, Math.min(5, batchSize)),
+                Math.max(1, Math.min(5, locationBatchSize)),
                 yearBounds.yearStartMillis(),
-                yearBounds.nextYearStartMillis());
+                yearBounds.nextYearStartMillis(),
+                Math.max(1, eventBatchSize),
+                batchId);
+        if (claimedGrids.isEmpty()) {
+            return Optional.empty();
+        }
+        List<OpenMeteoGridYear> gridYears = claimedGrids.stream()
+                .map(ClaimedGridCount::gridYear)
+                .toList();
+        int claimedEvents = claimedGrids.stream().mapToInt(ClaimedGridCount::eventCount).sum();
+        return Optional.of(new OpenMeteoClaim(batchId, gridYears, claimedEvents));
+    }
+
+    /** Checks cache coverage by grid/year without scanning the claimed events. */
+    public boolean hasCachedWeather(OpenMeteoClaim claim) {
+        PairScope scope = pairScope(claim.gridYears());
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+                WITH %s
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM open_meteo_hourly_weather w
+                    JOIN claimed_pairs p
+                      ON p.latitude_tenths = w.latitude_tenths
+                     AND p.longitude_tenths = w.longitude_tenths
+                     AND w.valid_from >= p.year_start
+                     AND w.valid_from < p.year_end
+                )
+                """.formatted(scope.cte()), Boolean.class, scope.arguments()));
     }
 
     /** Applies cached hourly weather and finalizes every matching claimed event. */
     @Transactional
-    public int applyCachedWeather(List<OpenMeteoGridYear> claimed) {
-        if (claimed.isEmpty()) {
-            return 0;
-        }
-        PairScope scope = pairScope(claimed);
+    public int applyCachedWeather(OpenMeteoClaim claim) {
         return jdbcTemplate.update("""
-                WITH %s,
-                weather_matches AS (
+                WITH weather_matches AS (
                     SELECT e.id,
                            w.temperature2m,
                            w.precipitation,
@@ -174,21 +208,16 @@ public class OpenMeteoWeatherBatchRepository {
                            END AS relative_angle
                     FROM segment_events e
                     JOIN open_meteo_segment_grid g ON g.segment_id = e.segment_id
-                    JOIN claimed_pairs p
-                      ON p.latitude_tenths = g.latitude_tenths
-                     AND p.longitude_tenths = g.longitude_tenths
-                     AND e.event_timestamp >= p.year_start
-                     AND e.event_timestamp < p.year_end
                     JOIN open_meteo_hourly_weather w
                       ON w.latitude_tenths = g.latitude_tenths
                      AND w.longitude_tenths = g.longitude_tenths
-                     AND w.valid_from = (
-                         FLOOR(e.event_timestamp::numeric / %d) * %d
-                     )::bigint
+                     AND w.valid_from = (e.event_timestamp / %d) * %d
                     WHERE e.weather_processing_status = 'PROCESSING'
+                      AND e.weather_processing_batch_id = ?
                 )
                 UPDATE segment_events e
                 SET weather_processing_status = 'DONE',
+                    weather_processing_batch_id = NULL,
                     weather_enriched = true,
                     temperature2m = matched.temperature2m,
                     precipitation = matched.precipitation,
@@ -205,73 +234,35 @@ public class OpenMeteoWeatherBatchRepository {
                 FROM weather_matches matched
                 WHERE e.id = matched.id
                   AND e.weather_processing_status = 'PROCESSING'
-                """.formatted(scope.cte(), HOUR_MILLIS, HOUR_MILLIS), scope.arguments());
+                  AND e.weather_processing_batch_id = ?
+                """.formatted(HOUR_MILLIS, HOUR_MILLIS), claim.batchId(), claim.batchId());
     }
 
-    public int countProcessingEvents(List<OpenMeteoGridYear> claimed) {
-        if (claimed.isEmpty()) {
-            return 0;
-        }
-        PairScope scope = pairScope(claimed);
-        Integer count = jdbcTemplate.queryForObject("""
-                WITH %s
-                SELECT COUNT(*)::integer
-                FROM segment_events e
-                JOIN open_meteo_segment_grid g ON g.segment_id = e.segment_id
-                JOIN claimed_pairs p
-                  ON p.latitude_tenths = g.latitude_tenths
-                 AND p.longitude_tenths = g.longitude_tenths
-                 AND e.event_timestamp >= p.year_start
-                 AND e.event_timestamp < p.year_end
-                WHERE e.weather_processing_status = 'PROCESSING'
-                """.formatted(scope.cte()), Integer.class, scope.arguments());
-        return Objects.requireNonNullElse(count, 0);
-    }
-
-    public List<OpenMeteoLocation> findMissingLocations(List<OpenMeteoGridYear> claimed) {
-        if (claimed.isEmpty()) {
-            return List.of();
-        }
-        PairScope scope = pairScope(claimed);
+    public List<OpenMeteoLocation> findMissingLocations(OpenMeteoClaim claim) {
         return jdbcTemplate.query("""
-                WITH %s
                 SELECT g.latitude_tenths, g.longitude_tenths
                 FROM segment_events e
                 JOIN open_meteo_segment_grid g ON g.segment_id = e.segment_id
-                JOIN claimed_pairs p
-                  ON p.latitude_tenths = g.latitude_tenths
-                 AND p.longitude_tenths = g.longitude_tenths
-                 AND e.event_timestamp >= p.year_start
-                 AND e.event_timestamp < p.year_end
                 WHERE e.weather_processing_status = 'PROCESSING'
+                  AND e.weather_processing_batch_id = ?
                 GROUP BY g.latitude_tenths, g.longitude_tenths
                 ORDER BY g.latitude_tenths, g.longitude_tenths
-                """.formatted(scope.cte()),
+                """,
                 (resultSet, rowNum) -> new OpenMeteoLocation(resultSet.getInt(1), resultSet.getInt(2)),
-                scope.arguments());
+                claim.batchId());
     }
 
-    public MissingWindow findMissingWindow(List<OpenMeteoGridYear> claimed) {
-        if (claimed.isEmpty()) {
-            return null;
-        }
-        PairScope scope = pairScope(claimed);
+    public MissingWindow findMissingWindow(OpenMeteoClaim claim) {
         return jdbcTemplate.queryForObject("""
-                WITH %s
                 SELECT MIN(e.event_timestamp), MAX(e.event_timestamp)
                 FROM segment_events e
-                JOIN open_meteo_segment_grid g ON g.segment_id = e.segment_id
-                JOIN claimed_pairs p
-                  ON p.latitude_tenths = g.latitude_tenths
-                 AND p.longitude_tenths = g.longitude_tenths
-                 AND e.event_timestamp >= p.year_start
-                 AND e.event_timestamp < p.year_end
                 WHERE e.weather_processing_status = 'PROCESSING'
-                """.formatted(scope.cte()), (resultSet, rowNum) -> {
+                  AND e.weather_processing_batch_id = ?
+                """, (resultSet, rowNum) -> {
             Long minimum = resultSet.getObject(1, Long.class);
             Long maximum = resultSet.getObject(2, Long.class);
             return minimum == null || maximum == null ? null : new MissingWindow(minimum, maximum);
-        }, scope.arguments());
+        }, claim.batchId());
     }
 
     /** Idempotently writes a fully validated response in bounded JDBC batches. */
@@ -312,37 +303,27 @@ public class OpenMeteoWeatherBatchRepository {
 
     /** Marks only still-unmatched events in the claimed tuples as errors. */
     @Transactional
-    public int markRemainingEventsError(List<OpenMeteoGridYear> claimed) {
-        return updateClaimedStatus(claimed, "ERROR", true);
+    public int markRemainingEventsError(OpenMeteoClaim claim) {
+        return updateClaimedStatus(claim, "ERROR", true);
     }
 
     /** Releases only still-processing events in the claimed tuples for a later retry. */
     @Transactional
-    public int releaseBatch(List<OpenMeteoGridYear> claimed) {
-        return updateClaimedStatus(claimed, "PENDING", false);
+    public int releaseBatch(OpenMeteoClaim claim) {
+        return updateClaimedStatus(claim, "PENDING", false);
     }
 
-    private int updateClaimedStatus(List<OpenMeteoGridYear> claimed, String status, boolean clearWeather) {
-        if (claimed.isEmpty()) {
-            return 0;
-        }
-        PairScope scope = pairScope(claimed);
+    private int updateClaimedStatus(OpenMeteoClaim claim, String status, boolean clearWeather) {
         String assignments = clearWeather
-                ? "weather_processing_status = '" + status + "', " + CLEAR_WEATHER_FIELDS
-                : "weather_processing_status = '" + status + "'";
+                ? "weather_processing_status = '" + status + "', weather_processing_batch_id = NULL, "
+                    + CLEAR_WEATHER_FIELDS
+                : "weather_processing_status = '" + status + "', weather_processing_batch_id = NULL";
         return jdbcTemplate.update("""
-                WITH %s
                 UPDATE segment_events e
                 SET %s
-                FROM open_meteo_segment_grid g
-                JOIN claimed_pairs p
-                  ON p.latitude_tenths = g.latitude_tenths
-                 AND p.longitude_tenths = g.longitude_tenths
-                WHERE e.segment_id = g.segment_id
-                  AND e.event_timestamp >= p.year_start
-                  AND e.event_timestamp < p.year_end
-                  AND e.weather_processing_status = 'PROCESSING'
-                """.formatted(scope.cte(), assignments), scope.arguments());
+                WHERE e.weather_processing_status = 'PROCESSING'
+                  AND e.weather_processing_batch_id = ?
+                """.formatted(assignments), claim.batchId());
     }
 
     private PairScope pairScope(List<OpenMeteoGridYear> claimed) {
@@ -371,6 +352,9 @@ public class OpenMeteoWeatherBatchRepository {
     }
 
     public record MissingWindow(long minimumTimestamp, long maximumTimestamp) {
+    }
+
+    private record ClaimedGridCount(OpenMeteoGridYear gridYear, int eventCount) {
     }
 
     private record PairScope(String cte, Object[] arguments) {

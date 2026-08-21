@@ -8,12 +8,20 @@ import org.springframework.stereotype.Service;
 public class RouteComparisonClassifier {
 
     private final double detourThreshold;
+    private final double maximumEquivalentExcessMeters;
     private final double minimumRouteOverlapRatio;
 
     public RouteComparisonClassifier(
             @Value("${analysis.detour.threshold}") double detourThreshold,
+            @Value("${analysis.detour.maximum-equivalent-excess-meters}") double maximumEquivalentExcessMeters,
             @Value("${analysis.route-overlap.minimum-ratio}") double minimumRouteOverlapRatio) {
+        if (!Double.isFinite(maximumEquivalentExcessMeters) || maximumEquivalentExcessMeters <= 0.0) {
+            throw new IllegalArgumentException(
+                    "Maximum equivalent-route excess distance must be finite and positive");
+        }
+
         this.detourThreshold = detourThreshold;
+        this.maximumEquivalentExcessMeters = maximumEquivalentExcessMeters;
         this.minimumRouteOverlapRatio = minimumRouteOverlapRatio;
     }
 
@@ -22,7 +30,12 @@ public class RouteComparisonClassifier {
                                         double overlapRatio) {
         validateMetrics(actualDistance, shortestPathDistance, overlapRatio);
 
-        if (actualDistance <= shortestPathDistance * (1.0 + detourThreshold)) {
+        double excessDistance = actualDistance - shortestPathDistance;
+        double allowedExcessDistance = Math.min(
+                shortestPathDistance * detourThreshold,
+                maximumEquivalentExcessMeters);
+
+        if (excessDistance <= allowedExcessDistance) {
             return RouteComparisonType.EQUIVALENT_ROUTE;
         }
 

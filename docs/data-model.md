@@ -22,10 +22,12 @@ The central entity. One record per imported SimRa ride file.
 | `shortestPath` | LineString (4326) | GraphHopper shortest path between start and end |
 | `actualDistance` | double | Distance of the map-matched trajectory in meters |
 | `shortestPathDistance` | double | Distance of the shortest path in meters |
-| `isDetour` | boolean | False for `EQUIVALENT_ROUTE`; true for both detour comparison types |
+| `isDetour` | boolean | False for the within-tolerance `EQUIVALENT_ROUTE`; true for both detour comparison types |
 | `overlapRatio` | double | Fraction of shortest-path length inside the configured metric buffer around the actual route |
 | `routeComparisonType` | enum | `EQUIVALENT_ROUTE`, `LOCAL_DETOUR`, or `CORRIDOR_ALTERNATIVE` after successful analysis |
 | `originalFilename` | string | Source CSV filename |
+
+`EQUIVALENT_ROUTE` is the persisted name for the distance-tolerance outcome, not a claim that the route geometries are identical. With the default policy, a ride remains in this class when its signed excess distance is no greater than `min(10% of shortestPathDistance, 500 m)`. Exceeding either allowance produces a detour; overlap then separates `LOCAL_DETOUR` from `CORRIDOR_ALTERNATIVE`. Only local detours generate preference and avoidance events.
 
 **Ride status lifecycle:**
 
@@ -123,7 +125,7 @@ For Ohsome, `DONE` means that the segment/month pair was evaluated successfully;
 
 `temperature2m`, `precipitation`, `windSpeed10m`, `windDirection10m`, `weatherCode`, `relativeWindAngleDegrees`, `windExposure` (`HEADWIND`, `CROSSWIND`, `TAILWIND`)
 
-`open_meteo_segment_grid` stores the permanent segment-centroid assignment as integer latitude/longitude tenths. `open_meteo_hourly_weather` stores the five raw weather fields with a composite primary key of `(latitude_tenths, longitude_tenths, valid_from)`. These tables are internal restart-safe caches; API weather data remains on `segment_events`.
+`open_meteo_segment_grid` stores the permanent segment-centroid assignment as integer latitude/longitude tenths. `open_meteo_hourly_weather` stores the five raw weather fields with a composite primary key of `(latitude_tenths, longitude_tenths, valid_from)`. The nullable `weatherProcessingBatchId` isolates each bounded weather claim and is cleared when the claim finishes or is released. These tables and the batch identifier are internal restart-safe processing state; API weather data remains on `segment_events`.
 
 **Traffic fields** (populated after Berlin traffic detector enrichment):
 

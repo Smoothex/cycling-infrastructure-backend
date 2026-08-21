@@ -367,10 +367,18 @@ Per-stage pipeline health: ride processing status breakdown and per-enrichment-s
 }
 ```
 
+**`GET /api/analytics/route-comparisons`**
+
+Returns filter-aware route-comparison counts and detour-impact quartiles. The response also includes `detourThresholdRatio`, `maximumEquivalentExcessDistanceMeters`, and `minimumOverlapRatio`, so clients can display the active classification policy without duplicating configuration values. These fields report the current processing configuration; after changing it, fully reprocess the rides before interpreting stored classifications or events under the new values.
+
 **`GET /api/analytics/route-comparisons/calibration.csv`**  
-Downloads a deterministic, class-balanced sample for offline route-comparison review. Optional `from` and `to` parameters filter by ride start time; `perType` controls the number of rides per baseline class and is constrained to 1–200. The CSV contains both route geometries as WKT, the continuous comparison metrics, GPS accuracy context, and empty `review_label` and `review_notes` columns. This export is for manual calibration and is not queried by the frontend.
+Downloads a deterministic, class-balanced sample for offline route-comparison review. Optional `from` and `to` parameters filter by ride start time; `perType` controls the number of rides per baseline class and is constrained to 1–200. The CSV contains both route geometries as WKT, the continuous comparison metrics, GPS accuracy context, and empty `review_label` and `review_notes` columns. The `detour_threshold_ratio`, `maximum_equivalent_excess_distance_m`, and `minimum_overlap_ratio` columns record the active classification policy on every row, keeping an exported sample interpretable if configuration later changes. This export is for manual calibration and is not queried by the frontend.
 
 Permitted manual labels are `EQUIVALENT_ROUTE`, `LOCAL_DETOUR`, `CORRIDOR_ALTERNATIVE`, and `AMBIGUOUS_OR_INVALID`. Labels remain in the downloaded file; the endpoint does not write them back to the application.
+
+**`GET /api/route-comparisons/review-sample/{rideId}`**
+
+Returns both route geometries, comparison metrics, generated segment signals, any saved manual review, and the same three active policy fields as the analytics summary. `GET /api/route-comparisons/review-sample.csv` exports the balanced review sample and repeats those policy values in the three CSV columns documented above.
 
 **`GET /api/analytics/distribution?dimension=HOUR_OF_DAY`**  
 Event distribution broken down by a dimension. Returns one entry per dimension value, sorted by total event count. Also accepts `from`, `to`, `eventType`, `rideIntent`, `trafficCondition`, `enrichmentFilters`, and `limit` (default `50`, clamped to `[1, 200]`).

@@ -58,9 +58,9 @@ class DetourAnalysisServiceTest {
     }
 
     @Test
-    void corridorAlternativePreparesNoEvents() {
-        Ride ride = ride(1_200.0);
-        ResponsePath shortestPath = shortestPath(1_000.0);
+    void absoluteCapTriggeredCorridorAlternativePreparesNoEvents() {
+        Ride ride = ride(10_500.01);
+        ResponsePath shortestPath = shortestPath(10_000.0);
         when(graphHopperService.getShortestPath(52.5, 13.4, 52.5, 13.41))
                 .thenReturn(shortestPath);
         when(rideRepository.calculateSpatialLengthOverlap(anyString(), anyString(), eq(20.0)))
@@ -70,13 +70,15 @@ class DetourAnalysisServiceTest {
 
         assertThat(result).isEqualTo(DetourAnalysisResult.empty());
         assertThat(ride.getRouteComparisonType()).isEqualTo(RouteComparisonType.CORRIDOR_ALTERNATIVE);
+        assertThat(ride.getIsDetour()).isTrue();
         assertThat(ride.getStatus()).isEqualTo(Status.PROCESSED);
+        verifyNoInteractions(streetSegmentService, streetSegmentRepository);
     }
 
     @Test
-    void localDetourReturnsPreparedChosenEventsWithoutPersistingThem() {
-        Ride ride = ride(1_200.0);
-        ResponsePath shortestPath = shortestPath(1_000.0);
+    void absoluteCapTriggeredLocalDetourReturnsPreparedChosenEventsWithoutPersistingThem() {
+        Ride ride = ride(10_500.01);
+        ResponsePath shortestPath = shortestPath(10_000.0);
         when(graphHopperService.getShortestPath(52.5, 13.4, 52.5, 13.41))
                 .thenReturn(shortestPath);
         when(rideRepository.calculateSpatialLengthOverlap(anyString(), anyString(), eq(20.0)))
@@ -88,6 +90,7 @@ class DetourAnalysisServiceTest {
         DetourAnalysisResult result = service.analyzeRide(ride, trace());
 
         assertThat(ride.getRouteComparisonType()).isEqualTo(RouteComparisonType.LOCAL_DETOUR);
+        assertThat(ride.getIsDetour()).isTrue();
         assertThat(result.chosenEdgeBearings()).containsEntry(1, 90.0);
         assertThat(result.chosenEdgeTimestamps()).containsEntry(1, 2_000L);
         verify(streetSegmentService).ensureSegmentsExist(
@@ -147,7 +150,7 @@ class DetourAnalysisServiceTest {
                 streetSegmentService,
                 streetSegmentRepository,
                 rideIntentClassifier,
-                new RouteComparisonClassifier(0.10, 0.30));
+                new RouteComparisonClassifier(0.10, 500.0, 0.30));
         ReflectionTestUtils.setField(result, "proximityMeters", 20.0);
         return result;
     }

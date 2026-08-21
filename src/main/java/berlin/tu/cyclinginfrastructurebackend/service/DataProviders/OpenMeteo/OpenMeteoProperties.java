@@ -16,6 +16,7 @@ import java.time.Duration;
 public class OpenMeteoProperties implements InitializingBean {
 
     private int batchSize = 5;
+    private int eventBatchSize = 25_000;
     private Duration initialRetryDelay = Duration.ofMinutes(1);
     private Duration maxRetryDelay = Duration.ofMinutes(30);
     private Duration connectTimeout = Duration.ofSeconds(30);
@@ -29,6 +30,10 @@ public class OpenMeteoProperties implements InitializingBean {
     public void validate() {
         if (batchSize < 1 || batchSize > 5) {
             throw new IllegalArgumentException("pipeline.enrichment.weather.batch-size must be between 1 and 5");
+        }
+        if (eventBatchSize < 1 || eventBatchSize > 100_000) {
+            throw new IllegalArgumentException(
+                    "pipeline.enrichment.weather.event-batch-size must be between 1 and 100000");
         }
         requirePositive(initialRetryDelay, "pipeline.enrichment.weather.initial-retry-delay");
         requirePositive(maxRetryDelay, "pipeline.enrichment.weather.max-retry-delay");

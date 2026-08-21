@@ -75,6 +75,9 @@ class AnalyticsControllerTest {
                         "EQUIVALENT_ROUTE", 8L,
                         "LOCAL_DETOUR", 4L,
                         "CORRIDOR_ALTERNATIVE", 0L),
+                        0.10,
+                        500.0,
+                        0.30,
                         List.of(new DetourImpactDto(
                                 RouteComparisonType.LOCAL_DETOUR, 4L, 11.25, 14.5, 19.75))));
 
@@ -86,6 +89,9 @@ class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.classifiedRideCount").value(12))
                 .andExpect(jsonPath("$.routeComparisonTypeCounts.EQUIVALENT_ROUTE").value(8))
                 .andExpect(jsonPath("$.routeComparisonTypeCounts.CORRIDOR_ALTERNATIVE").value(0))
+                .andExpect(jsonPath("$.detourThresholdRatio").value(0.10))
+                .andExpect(jsonPath("$.maximumEquivalentExcessDistanceMeters").value(500.0))
+                .andExpect(jsonPath("$.minimumOverlapRatio").value(0.30))
                 .andExpect(jsonPath("$.detourImpact[0].routeComparisonType").value("LOCAL_DETOUR"))
                 .andExpect(jsonPath("$.detourImpact[0].eligibleRideCount").value(4))
                 .andExpect(jsonPath("$.detourImpact[0].lowerQuartilePercent").value(11.25))

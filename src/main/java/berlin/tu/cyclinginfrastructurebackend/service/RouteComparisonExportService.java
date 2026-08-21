@@ -3,6 +3,7 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 import com.opencsv.CSVWriter;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -22,6 +23,9 @@ public class RouteComparisonExportService {
             "absolute_excess_distance_m",
             "relative_detour_ratio",
             "overlap_ratio",
+            "detour_threshold_ratio",
+            "maximum_equivalent_excess_distance_m",
+            "minimum_overlap_ratio",
             "median_gps_accuracy_m",
             "gps_point_count",
             "actual_route_wkt",
@@ -31,9 +35,20 @@ public class RouteComparisonExportService {
     };
 
     private final EntityManager entityManager;
+    private final double detourThresholdRatio;
+    private final double maximumEquivalentExcessDistanceMeters;
+    private final double minimumOverlapRatio;
 
-    public RouteComparisonExportService(EntityManager entityManager) {
+    public RouteComparisonExportService(
+            EntityManager entityManager,
+            @Value("${analysis.detour.threshold:0.10}") double detourThresholdRatio,
+            @Value("${analysis.detour.maximum-equivalent-excess-meters:500}")
+            double maximumEquivalentExcessDistanceMeters,
+            @Value("${analysis.route-overlap.minimum-ratio:0.30}") double minimumOverlapRatio) {
         this.entityManager = entityManager;
+        this.detourThresholdRatio = detourThresholdRatio;
+        this.maximumEquivalentExcessDistanceMeters = maximumEquivalentExcessDistanceMeters;
+        this.minimumOverlapRatio = minimumOverlapRatio;
     }
 
     public String exportCalibrationSample(Long from, Long to, int perType) {
@@ -108,6 +123,9 @@ public class RouteComparisonExportService {
                         value(row[5]),
                         value(row[6]),
                         value(row[7]),
+                        value(detourThresholdRatio),
+                        value(maximumEquivalentExcessDistanceMeters),
+                        value(minimumOverlapRatio),
                         value(row[8]),
                         value(row[9]),
                         value(row[10]),

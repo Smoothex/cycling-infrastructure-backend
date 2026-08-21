@@ -44,7 +44,10 @@ class ApiAnalyticsServiceTest {
             rideRepository,
             streetSegmentRepository,
             segmentEventRepository,
-            entityManager);
+            entityManager,
+            0.10,
+            500.0,
+            0.30);
 
     @BeforeEach
     void resetEntityManager() {
@@ -86,6 +89,9 @@ class ApiAnalyticsServiceTest {
         assertThat(result.routeComparisonTypeCounts()).containsEntry("EQUIVALENT_ROUTE", 8L);
         assertThat(result.routeComparisonTypeCounts()).containsEntry("LOCAL_DETOUR", 4L);
         assertThat(result.routeComparisonTypeCounts()).containsEntry("CORRIDOR_ALTERNATIVE", 0L);
+        assertThat(result.detourThresholdRatio()).isEqualTo(0.10);
+        assertThat(result.maximumEquivalentExcessDistanceMeters()).isEqualTo(500.0);
+        assertThat(result.minimumOverlapRatio()).isEqualTo(0.30);
         assertThat(result.detourImpact()).containsExactly(
                 new DetourImpactDto(RouteComparisonType.LOCAL_DETOUR, 4L, 11.25, 14.5, 19.75),
                 new DetourImpactDto(RouteComparisonType.CORRIDOR_ALTERNATIVE, 3L, 8.0, 17.0, 31.0));

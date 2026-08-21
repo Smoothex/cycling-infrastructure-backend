@@ -15,7 +15,7 @@ Ohsome uses a specialized segment/month batch described below so that one cached
 
 **Source:** `https://archive-api.open-meteo.com/v1/archive`
 
-Fetches hourly historical weather data for the location and timestamp of each event. Segment centroids are permanently assigned to a 0.1° grid, stored as integer latitude/longitude tenths. Pending work is grouped by grid location and UTC year; each request covers up to five locations and the minimum/maximum UTC dates still missing from the database cache.
+Fetches hourly historical weather data for the location and timestamp of each event. Segment centroids are permanently assigned to a 0.1° grid, stored as integer latitude/longitude tenths. A usable centroid is accepted even when GraphHopper produced a zero-length LineString with duplicate coordinates. Pending work is grouped by grid location and UTC year; each request covers up to five locations and the minimum/maximum UTC dates needed by the claimed events.
 
 Requests use `timezone=GMT` and `timeformat=unixtime` and return:
 
@@ -36,12 +36,13 @@ The normalized hourly response is cached in `open_meteo_hourly_weather` by grid 
 
 The relative angle and classification are both null when either bearing or wind direction is unavailable.
 
-Before each request, cached hours finalize matching events. Transient 429, timeout, I/O, and server failures release unresolved events to `PENDING` and apply exponential backoff. Non-retryable 4xx and structurally invalid successful responses mark unresolved claimed events `ERROR`; a valid response missing an individual event hour marks only that event `ERROR`.
+Database work is independently bounded by `event-batch-size`. Each claim receives a UUID, and no claim, weather update, error finalization, or release can affect more than that number of events. The cache is checked by grid/year before event rows are scanned. Cached hours finalize matching events; unresolved hours are then requested and cached. Transient API failures and database query timeouts release only the affected claim to `PENDING` and apply exponential backoff. Non-retryable 4xx and structurally invalid successful responses mark unresolved claimed events `ERROR`; a valid response missing an individual event hour marks only that event `ERROR`.
 
 | Property | Default |
 |---|---|
-| `pipeline.enrichment.weather.enabled` | `false` |
+| `pipeline.enrichment.weather.enabled` | `true` |
 | `pipeline.enrichment.weather.batch-size` | `5` grid/year locations |
+| `pipeline.enrichment.weather.event-batch-size` | `25000` events |
 | `pipeline.enrichment.weather.delay-ms` | `60000` |
 | `pipeline.enrichment.weather.initial-retry-delay` | `PT1M` |
 | `pipeline.enrichment.weather.max-retry-delay` | `PT30M` |
