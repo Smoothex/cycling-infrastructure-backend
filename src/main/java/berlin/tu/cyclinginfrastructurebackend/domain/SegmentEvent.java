@@ -33,6 +33,7 @@ import java.util.UUID;
         @Index(name = "idx_cycleway_type", columnList = "cyclewayType"),
         @Index(name = "idx_event_weather_work",
                 columnList = "weatherProcessingStatus,eventTimestamp,segment_id"),
+        @Index(name = "idx_event_weather_batch", columnList = "weather_processing_batch_id"),
         @Index(name = "idx_event_ohsome_work",
                 columnList = "ohsomeProcessingStatus,eventTimestamp,segment_id")
 })
@@ -72,6 +73,9 @@ public class SegmentEvent {
     @Enumerated(EnumType.STRING)
     @Column(length = 20)
     private EnrichmentStatus weatherProcessingStatus = EnrichmentStatus.PENDING;
+
+    @Column(name = "weather_processing_batch_id")
+    private UUID weatherProcessingBatchId;
 
     @Column(columnDefinition = "boolean not null default false")
     private boolean berlinOpenDataEnriched = false;

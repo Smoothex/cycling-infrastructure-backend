@@ -1,5 +1,6 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoClaim;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoGridYear;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.OpenMeteo.OpenMeteoHourlyRow;
 import org.junit.jupiter.api.BeforeAll;
@@ -15,19 +16,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -78,6 +71,7 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
                     segment_id bigint NOT NULL REFERENCES street_segments(id),
                     event_timestamp bigint,
                     weather_processing_status varchar(20) NOT NULL,
+                    weather_processing_batch_id uuid,
                     weather_enriched boolean NOT NULL DEFAULT false,
                     temperature2m double precision,
                     precipitation double precision,
@@ -126,6 +120,16 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
     }
 
     @Test
+    void mapsDegenerateLineWhenItsCentroidIsUsable() {
+        insertSegment(10, "LINESTRING(13.5241148 52.4595798, 13.5241148 52.4595798)");
+        insertEvent(1, 10, timestamp("2024-01-01T00:00:00Z"), 0.0);
+
+        assertThat(repository.populateMissingSegmentGrids()).isEqualTo(1);
+        assertThat(repository.markInvalidPendingEvents()).isZero();
+        assertThat(grid(10)).containsExactly(525, 135);
+    }
+
+    @Test
     void oneCachedGridHourUpdatesEventsAcrossMultipleSegments() {
         insertSegment(10, "LINESTRING(13.36 52.46, 13.38 52.48)");
         insertSegment(20, "LINESTRING(13.35 52.45, 13.39 52.49)");
@@ -134,12 +138,15 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         insertEvent(2, 20, hour + 3_599_000, 90.0);
         preparePendingWork();
 
-        List<OpenMeteoGridYear> claimed = claim(1);
-        assertThat(claimed).containsExactly(new OpenMeteoGridYear(525, 134, 2024));
+        OpenMeteoClaim claimed = claim(1);
+        assertThat(claimed.gridYears()).containsExactly(new OpenMeteoGridYear(525, 134, 2024));
+        assertThat(repository.hasCachedWeather(claimed)).isFalse();
         repository.upsertHourlyWeather(List.of(
                 new OpenMeteoHourlyRow(525, 134, hour, 5.0, 0.2, 12.0, 180.0, 61)));
+        assertThat(repository.hasCachedWeather(claimed)).isTrue();
 
         assertThat(repository.applyCachedWeather(claimed)).isEqualTo(2);
+        assertThat(eventsInBatch(claimed)).isZero();
 
         assertThat(eventState(1)).isEqualTo(
                 new EventState("DONE", true, 5.0, 0.2, 12.0, 180.0, 61, 90.0, "CROSSWIND"));
@@ -157,44 +164,37 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         insertEvent(3, 30, timestamp("2024-01-01T00:00:00Z"), 0.0);
         preparePendingWork();
 
-        List<OpenMeteoGridYear> first = claim(2);
-        List<OpenMeteoGridYear> second = claim(2);
+        OpenMeteoClaim first = claim(2);
+        OpenMeteoClaim second = claim(2);
 
-        assertThat(first).containsExactly(
+        assertThat(first.gridYears()).containsExactly(
                 new OpenMeteoGridYear(520, 130, 2023),
                 new OpenMeteoGridYear(522, 132, 2023));
-        assertThat(second).containsExactly(new OpenMeteoGridYear(524, 134, 2024));
+        assertThat(second.gridYears()).containsExactly(new OpenMeteoGridYear(524, 134, 2024));
     }
 
     @Test
-    void concurrentClaimsDoNotReturnTheSameGridYearWork() throws Exception {
+    void claimsAndReleasesAreBoundedAndIsolatedByBatchId() {
         insertSegment(10, "LINESTRING(12.99 51.99, 13.01 52.01)");
         insertEvent(1, 10, timestamp("2024-01-01T00:00:00Z"), 0.0);
+        insertEvent(2, 10, timestamp("2024-01-01T01:00:00Z"), 0.0);
+        insertEvent(3, 10, timestamp("2024-01-01T02:00:00Z"), 0.0);
         preparePendingWork();
-        CountDownLatch ready = new CountDownLatch(2);
-        CountDownLatch start = new CountDownLatch(1);
 
-        CompletableFuture<List<OpenMeteoGridYear>> first;
-        CompletableFuture<List<OpenMeteoGridYear>> second;
-        try (Connection blocker = dataSource.getConnection()) {
-            blocker.setAutoCommit(false);
-            try (PreparedStatement statement = blocker.prepareStatement(
-                    "SELECT id FROM segment_events WHERE id = 1 FOR UPDATE")) {
-                statement.executeQuery().close();
-            }
-            first = concurrentClaim(ready, start);
-            second = concurrentClaim(ready, start);
-            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
-            start.countDown();
-            Thread.sleep(100);
-            blocker.commit();
-        }
+        OpenMeteoClaim first = claim(1, 2);
+        OpenMeteoClaim second = claim(1, 2);
 
-        List<OpenMeteoGridYear> returned = Stream.concat(
-                        first.get(10, TimeUnit.SECONDS).stream(),
-                        second.get(10, TimeUnit.SECONDS).stream())
-                .toList();
-        assertThat(returned).containsExactly(new OpenMeteoGridYear(520, 130, 2024));
+        assertThat(first.eventCount()).isEqualTo(2);
+        assertThat(second.eventCount()).isEqualTo(1);
+        assertThat(second.batchId()).isNotEqualTo(first.batchId());
+        assertThat(eventsInBatch(first)).isEqualTo(2);
+        assertThat(eventsInBatch(second)).isEqualTo(1);
+
+        assertThat(repository.releaseBatch(first)).isEqualTo(2);
+        assertThat(eventsInBatch(first)).isZero();
+        assertThat(eventsInBatch(second)).isEqualTo(1);
+        assertThat(statusCount("PENDING")).isEqualTo(2);
+        assertThat(statusCount("PROCESSING")).isEqualTo(1);
     }
 
     @Test
@@ -203,10 +203,12 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         long hour = timestamp("2024-01-01T00:00:00Z");
         insertEvent(1, 10, hour, 0.0);
         preparePendingWork();
-        List<OpenMeteoGridYear> firstClaim = claim(1);
+        OpenMeteoClaim firstClaim = claim(1);
 
         assertThat(repository.releaseBatch(firstClaim)).isEqualTo(1);
-        assertThat(claim(1)).isEqualTo(firstClaim);
+        OpenMeteoClaim secondClaim = claim(1);
+        assertThat(secondClaim.gridYears()).isEqualTo(firstClaim.gridYears());
+        assertThat(secondClaim.batchId()).isNotEqualTo(firstClaim.batchId());
 
         OpenMeteoHourlyRow first = new OpenMeteoHourlyRow(520, 130, hour, 1.0, 2.0, 3.0, 4.0, 5);
         OpenMeteoHourlyRow replacement = new OpenMeteoHourlyRow(520, 130, hour, 6.0, 7.0, 8.0, 9.0, 10);
@@ -231,7 +233,7 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         insertEvent(6, 10, hour, 10.0);
         insertEvent(7, 10, hour, null);
         preparePendingWork();
-        List<OpenMeteoGridYear> claimed = claim(1);
+        OpenMeteoClaim claimed = claim(1);
         repository.upsertHourlyWeather(List.of(
                 new OpenMeteoHourlyRow(520, 130, hour, null, null, null, 350.0, null)));
 
@@ -252,7 +254,7 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         long hour = timestamp("2024-01-01T00:00:00Z");
         insertEvent(1, 10, hour, 90.0);
         preparePendingWork();
-        List<OpenMeteoGridYear> claimed = claim(1);
+        OpenMeteoClaim claimed = claim(1);
         repository.upsertHourlyWeather(List.of(
                 new OpenMeteoHourlyRow(520, 130, hour, 1.0, 0.0, null, null, 0)));
 
@@ -272,9 +274,10 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
 
         assertThat(repository.populateMissingSegmentGrids()).isEqualTo(1);
         assertThat(repository.markInvalidPendingEvents()).isEqualTo(2);
-        List<OpenMeteoGridYear> claimed = claim(1);
+        OpenMeteoClaim claimed = claim(1);
         assertThat(repository.applyCachedWeather(claimed)).isZero();
         assertThat(repository.markRemainingEventsError(claimed)).isEqualTo(1);
+        assertThat(eventsInBatch(claimed)).isZero();
 
         assertThat(statuses()).containsExactly("ERROR", "ERROR", "ERROR");
         assertThat(repository.hasPendingWork()).isFalse();
@@ -288,7 +291,7 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         insertEvent(1, 10, firstHour, 0.0);
         insertEvent(2, 10, secondHour, 0.0);
         preparePendingWork();
-        List<OpenMeteoGridYear> claimed = claim(1);
+        OpenMeteoClaim claimed = claim(1);
         repository.upsertHourlyWeather(List.of(
                 new OpenMeteoHourlyRow(520, 130, firstHour, 1.0, 0.0, 2.0, 0.0, 3)));
 
@@ -305,24 +308,13 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
         assertThat(repository.markInvalidPendingEvents()).isZero();
     }
 
-    private List<OpenMeteoGridYear> claim(int batchSize) {
-        return inTransaction(() -> repository.claimNextBatch(batchSize));
+    private OpenMeteoClaim claim(int locationBatchSize) {
+        return claim(locationBatchSize, 100);
     }
 
-    private CompletableFuture<List<OpenMeteoGridYear>> concurrentClaim(
-            CountDownLatch ready, CountDownLatch start) {
-        return CompletableFuture.supplyAsync(() -> {
-            ready.countDown();
-            try {
-                if (!start.await(5, TimeUnit.SECONDS)) {
-                    throw new IllegalStateException("Timed out waiting to start claim");
-                }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while starting claim", exception);
-            }
-            return claim(1);
-        });
+    private OpenMeteoClaim claim(int locationBatchSize, int eventBatchSize) {
+        return inTransaction(() -> repository.claimNextBatch(locationBatchSize, eventBatchSize))
+                .orElseThrow();
     }
 
     private void insertSegment(long id, String wkt) {
@@ -382,6 +374,22 @@ class OpenMeteoWeatherBatchRepositoryIntegrationTest {
     private List<String> statuses() {
         return jdbcTemplate.queryForList(
                 "SELECT weather_processing_status FROM segment_events ORDER BY id", String.class);
+    }
+
+    private int eventsInBatch(OpenMeteoClaim claim) {
+        return jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)::integer
+                FROM segment_events
+                WHERE weather_processing_batch_id = ?
+                """, Integer.class, claim.batchId());
+    }
+
+    private int statusCount(String status) {
+        return jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)::integer
+                FROM segment_events
+                WHERE weather_processing_status = ?
+                """, Integer.class, status);
     }
 
     private static long timestamp(String value) {

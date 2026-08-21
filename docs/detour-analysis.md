@@ -56,19 +56,23 @@ For eligible rides, the shortest-path profile computes this path between the fir
 
 ### 3. Route Comparison
 
-A ride is a detour if:
+A ride is a detour if its signed excess distance is greater than the smaller of the relative and absolute allowances:
 
 ```
-actual_distance > shortest_path_distance × (1 + threshold)
+excess_distance = actual_distance - shortest_path_distance
+allowed_excess = min(shortest_path_distance × relative_threshold, absolute_cap)
+is_detour = excess_distance > allowed_excess
 ```
 
-The threshold defaults to **10%** (`analysis.detour.threshold=0.10`). Rides within 10% of the shortest path are classified as `EQUIVALENT_ROUTE` and generate no avoidance or preference events.
+The relative threshold defaults to **10%** (`analysis.detour.threshold=0.10`) and the absolute cap defaults to **500 meters** (`analysis.detour.maximum-equivalent-excess-meters=500`). A ride must remain within both limits to be classified as `EQUIVALENT_ROUTE`; exceeding either limit makes it a detour. Equality at either effective boundary remains `EQUIVALENT_ROUTE`. Signed excess is used deliberately, so an observed distance shorter than the computed reference path is not turned into a detour by taking an absolute value.
+
+The absolute cap prevents the tolerated difference from growing without limit on long rides. For example, a 10 km shortest path may exceed it by at most 500 m, rather than the 1 km that a relative-only 10% rule would allow. `EQUIVALENT_ROUTE` is the persisted enum name for the within-tolerance outcome; it does not assert that the two route geometries are spatially equivalent. These rides generate no avoidance or preference events.
 
 ### 4. Local Detour and Corridor Alternative Classification
 
 Not every detour means the cyclist avoided specific segments — sometimes they took a completely different path (different neighborhood, different corridor). Route comparison is stored separately from processing status:
 
-- `EQUIVALENT_ROUTE` — no detour according to the configured distance threshold
+- `EQUIVALENT_ROUTE` — observed distance remains within both configured distance tolerances
 - `LOCAL_DETOUR` — a detour that remains on the same general corridor
 - `CORRIDOR_ALTERNATIVE` — a detour that follows a substantially different corridor
 
@@ -148,6 +152,9 @@ Detour analysis runs inside each parallel import task, after map matching and be
 | Property | Default | Description |
 |---|---|---|
 | `analysis.minimum-origin-destination-distance-meters` | `500` | Minimum geodesic distance between the first and last valid GPS points |
-| `analysis.detour.threshold` | `0.10` | Detour detection threshold (10%) |
+| `analysis.detour.threshold` | `0.10` | Relative excess-distance allowance (10%) |
+| `analysis.detour.maximum-equivalent-excess-meters` | `500` | Maximum absolute excess distance that may remain equivalent |
 | `analysis.route-overlap.minimum-ratio` | `0.30` | Minimum spatially covered share of the shortest path for a local detour |
 | `analysis.spatial.proximity-meters` | `20` | Parallel path tolerance (meters) |
+
+These are processing-time policy values, not query-time filters. Changing either distance limit or the overlap boundary does not reclassify stored rides or rebuild their segment events; the dataset must be fully reprocessed before API, UI, or CSV policy metadata is interpreted under the new configuration.

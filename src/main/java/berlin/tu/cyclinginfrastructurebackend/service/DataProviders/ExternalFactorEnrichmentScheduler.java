@@ -15,6 +15,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -38,7 +39,7 @@ public class ExternalFactorEnrichmentScheduler {
     private static final Duration RATE_LIMIT_INITIAL_BACKOFF = Duration.ofMinutes(1);
     private static final Duration RATE_LIMIT_MAX_BACKOFF = Duration.ofMinutes(30);
 
-    /** Per-pipeline pause deadline after an API rate limit; batches are skipped until it passes. */
+    /** Per-pipeline pause deadline after a transient failure; batches are skipped until it passes. */
     private final Map<String, Instant> rateLimitPauseUntil = new ConcurrentHashMap<>();
     /** Consecutive rate-limit hits per pipeline, drives exponential backoff when the API gives no reset time. */
     private final Map<String, Integer> consecutiveRateLimits = new ConcurrentHashMap<>();
@@ -106,7 +107,7 @@ public class ExternalFactorEnrichmentScheduler {
 
         Instant pausedUntil = rateLimitPauseUntil.get(WEATHER_LABEL);
         if (pausedUntil != null && Instant.now().isBefore(pausedUntil)) {
-            log.debug("{} enrichment paused until {} after a transient API failure.",
+            log.debug("{} enrichment paused until {} after a transient failure.",
                     WEATHER_LABEL, pausedUntil);
             return;
         }
@@ -122,6 +123,10 @@ public class ExternalFactorEnrichmentScheduler {
             Instant resumeAt = pauseAfterRateLimit(WEATHER_LABEL, null);
             log.warn("{} enrichment failed transiently; paused until {}: {}",
                     WEATHER_LABEL, resumeAt, exception.getMessage());
+        } catch (QueryTimeoutException exception) {
+            Instant resumeAt = pauseAfterRateLimit(WEATHER_LABEL, null);
+            log.warn("{} enrichment database operation timed out; paused until {}: {}",
+                    WEATHER_LABEL, resumeAt, rootCauseMessage(exception));
         } catch (RuntimeException exception) {
             log.error("{} enrichment batch failed: {}", WEATHER_LABEL, exception.getMessage(), exception);
         }
@@ -292,5 +297,13 @@ public class ExternalFactorEnrichmentScheduler {
         }
         rateLimitPauseUntil.put(label, resumeAt);
         return resumeAt;
+    }
+
+    private String rootCauseMessage(RuntimeException exception) {
+        Throwable cause = exception;
+        while (cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause.getMessage();
     }
 }

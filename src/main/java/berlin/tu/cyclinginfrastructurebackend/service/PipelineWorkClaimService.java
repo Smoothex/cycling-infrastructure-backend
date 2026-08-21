@@ -34,7 +34,7 @@ public class PipelineWorkClaimService {
         int ohsomeInitialized = initializeEnrichmentStatus("ohsome_processing_status", "ohsome_enriched");
         int trafficInitialized = initializeEnrichmentStatus("traffic_processing_status", "traffic_enriched");
 
-        int weatherReset = resetEnrichmentProcessing("weather_processing_status");
+        int weatherReset = resetWeatherProcessing();
         int berlinOpenDataReset = resetEnrichmentProcessing("berlin_open_data_processing_status");
         int ohsomeReset = resetEnrichmentProcessing("ohsome_processing_status");
         int trafficReset = resetEnrichmentProcessing("traffic_processing_status");
@@ -99,6 +99,18 @@ public class PipelineWorkClaimService {
                         SET %s = :pending
                         WHERE %s = :processing
                         """.formatted(statusColumn, statusColumn))
+                .setParameter("pending", EnrichmentStatus.PENDING.name())
+                .setParameter("processing", EnrichmentStatus.PROCESSING.name())
+                .executeUpdate();
+    }
+
+    private int resetWeatherProcessing() {
+        return entityManager.createNativeQuery("""
+                        UPDATE segment_events
+                        SET weather_processing_status = :pending,
+                            weather_processing_batch_id = NULL
+                        WHERE weather_processing_status = :processing
+                        """)
                 .setParameter("pending", EnrichmentStatus.PENDING.name())
                 .setParameter("processing", EnrichmentStatus.PROCESSING.name())
                 .executeUpdate();

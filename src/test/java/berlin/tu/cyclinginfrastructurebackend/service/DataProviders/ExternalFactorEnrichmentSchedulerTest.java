@@ -13,12 +13,15 @@ import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineWorkClaimService;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -45,6 +48,32 @@ class ExternalFactorEnrichmentSchedulerTest {
         scheduler.enrichWeatherPending();
 
         verify(weatherService).processNextBatch();
+    }
+
+    @Test
+    void weatherDatabaseTimeoutPausesTheNextScheduledAttempt() {
+        OpenMeteoBulkEnrichmentService weatherService = mock(OpenMeteoBulkEnrichmentService.class);
+        doThrow(new QueryTimeoutException("timeout", new RuntimeException("statement timeout")))
+                .when(weatherService).processNextBatch();
+        ExternalFactorEnrichmentScheduler scheduler = new ExternalFactorEnrichmentScheduler(
+                mock(SegmentEventRepository.class),
+                weatherService,
+                new OpenMeteoProperties(),
+                mock(RoadClosureDataProvider.class),
+                mock(OhsomeV2EnrichmentService.class),
+                mock(TrafficDataProvider.class),
+                mock(PipelineWorkClaimService.class),
+                mock(TileBuildService.class),
+                new PipelineActivityTracker()
+        );
+        ReflectionTestUtils.setField(scheduler, "pipelineEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "enrichmentEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "weatherEnabled", true);
+
+        scheduler.enrichWeatherPending();
+        scheduler.enrichWeatherPending();
+
+        verify(weatherService, times(1)).processNextBatch();
     }
 
     @Test

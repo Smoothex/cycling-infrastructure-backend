@@ -21,6 +21,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.dto.api.PipelineStatusDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.RouteComparisonSummaryDto;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -39,15 +40,26 @@ public class ApiAnalyticsService {
     private final StreetSegmentRepository streetSegmentRepository;
     private final SegmentEventRepository segmentEventRepository;
     private final EntityManager entityManager;
+    private final double detourThresholdRatio;
+    private final double maximumEquivalentExcessDistanceMeters;
+    private final double minimumOverlapRatio;
 
     public ApiAnalyticsService(RideRepository rideRepository,
                                StreetSegmentRepository streetSegmentRepository,
                                SegmentEventRepository segmentEventRepository,
-                               EntityManager entityManager) {
+                               EntityManager entityManager,
+                               @Value("${analysis.detour.threshold:0.10}") double detourThresholdRatio,
+                               @Value("${analysis.detour.maximum-equivalent-excess-meters:500}")
+                               double maximumEquivalentExcessDistanceMeters,
+                               @Value("${analysis.route-overlap.minimum-ratio:0.30}")
+                               double minimumOverlapRatio) {
         this.rideRepository = rideRepository;
         this.streetSegmentRepository = streetSegmentRepository;
         this.segmentEventRepository = segmentEventRepository;
         this.entityManager = entityManager;
+        this.detourThresholdRatio = detourThresholdRatio;
+        this.maximumEquivalentExcessDistanceMeters = maximumEquivalentExcessDistanceMeters;
+        this.minimumOverlapRatio = minimumOverlapRatio;
     }
 
     public ProcessingSummaryDto getProcessingSummary() {
@@ -118,7 +130,13 @@ public class ApiAnalyticsService {
                 .stream()
                 .map(this::toDetourImpact)
                 .toList();
-        return new RouteComparisonSummaryDto(classifiedRideCount, counts, detourImpact);
+        return new RouteComparisonSummaryDto(
+                classifiedRideCount,
+                counts,
+                detourThresholdRatio,
+                maximumEquivalentExcessDistanceMeters,
+                minimumOverlapRatio,
+                detourImpact);
     }
 
     private DetourImpactDto toDetourImpact(Object[] row) {

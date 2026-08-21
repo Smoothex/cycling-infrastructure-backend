@@ -5,15 +5,20 @@ import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.dao.QueryTimeoutException;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,18 +31,20 @@ class OpenMeteoBulkEnrichmentServiceTest {
     private final OpenMeteoBulkEnrichmentService service = new OpenMeteoBulkEnrichmentService(
             repository, client, properties, tileBuildService, new PipelineActivityTracker());
 
-    private final List<OpenMeteoGridYear> claimed = List.of(
-            new OpenMeteoGridYear(525, 134, 2024));
+    private final OpenMeteoClaim claimed = new OpenMeteoClaim(
+            UUID.fromString("11111111-1111-1111-1111-111111111111"),
+            List.of(new OpenMeteoGridYear(525, 134, 2024)),
+            2);
 
     @BeforeEach
     void pendingBatch() {
         when(repository.hasPendingWork()).thenReturn(true);
-        when(repository.claimNextBatch(5)).thenReturn(claimed);
-        when(repository.countProcessingEvents(claimed)).thenReturn(2);
+        when(repository.claimNextBatch(5, 25_000)).thenReturn(Optional.of(claimed));
     }
 
     @Test
     void finalizesCachedEventsWithoutCallingTheApi() {
+        when(repository.hasCachedWeather(claimed)).thenReturn(true);
         when(repository.applyCachedWeather(claimed)).thenReturn(2);
         when(repository.findMissingLocations(claimed)).thenReturn(List.of());
 
@@ -60,7 +67,8 @@ class OpenMeteoBulkEnrichmentServiceTest {
         List<OpenMeteoHourlyRow> rows = List.of(new OpenMeteoHourlyRow(
                 525, 134, Instant.parse("2024-02-01T23:00:00Z").toEpochMilli(),
                 1.0, 0.0, 2.0, 3.0, 4));
-        when(repository.applyCachedWeather(claimed)).thenReturn(0, 1);
+        when(repository.hasCachedWeather(claimed)).thenReturn(false);
+        when(repository.applyCachedWeather(claimed)).thenReturn(1);
         when(repository.findMissingLocations(claimed)).thenReturn(locations);
         when(repository.findMissingWindow(claimed)).thenReturn(
                 new OpenMeteoWeatherBatchRepository.MissingWindow(minimum, maximum));
@@ -70,7 +78,9 @@ class OpenMeteoBulkEnrichmentServiceTest {
 
         OpenMeteoEnrichmentBatchResult result = service.processNextBatch();
 
-        verify(repository).upsertHourlyWeather(rows);
+        InOrder persistenceOrder = inOrder(repository);
+        persistenceOrder.verify(repository).upsertHourlyWeather(rows);
+        persistenceOrder.verify(repository).applyCachedWeather(claimed);
         assertThat(result.downloadedEvents()).isEqualTo(1);
         assertThat(result.missingEvents()).isEqualTo(1);
         verify(tileBuildService).markDataChanged();
@@ -112,5 +122,18 @@ class OpenMeteoBulkEnrichmentServiceTest {
         assertThat(result.missingEvents()).isEqualTo(2);
         verify(repository).markRemainingEventsError(claimed);
         verify(repository, never()).releaseBatch(claimed);
+    }
+
+    @Test
+    void releasesTheBoundedClaimAfterADatabaseTimeout() {
+        QueryTimeoutException timeout = new QueryTimeoutException(
+                "weather update timed out", new RuntimeException("statement timeout"));
+        when(repository.hasCachedWeather(claimed)).thenThrow(timeout);
+        when(repository.releaseBatch(claimed)).thenReturn(2);
+
+        assertThatThrownBy(service::processNextBatch).isSameAs(timeout);
+
+        verify(repository).releaseBatch(claimed);
+        verify(repository, never()).markRemainingEventsError(claimed);
     }
 }

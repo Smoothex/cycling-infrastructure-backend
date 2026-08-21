@@ -23,7 +23,8 @@ import static org.mockito.Mockito.when;
 class RouteComparisonExportServiceTest {
 
     private final EntityManager entityManager = mock(EntityManager.class);
-    private final RouteComparisonExportService service = new RouteComparisonExportService(entityManager);
+    private final RouteComparisonExportService service = new RouteComparisonExportService(
+            entityManager, 0.10, 500.0, 0.30);
 
     @Test
     void exportContainsMetricsGeometriesAndEmptyReviewColumns() throws Exception {
@@ -56,13 +57,17 @@ class RouteComparisonExportServiceTest {
         assertThat(records.getFirst()).containsExactly(
                 "ride_id", "start_time", "baseline_route_comparison_type",
                 "actual_distance_m", "shortest_path_distance_m", "absolute_excess_distance_m",
-                "relative_detour_ratio", "overlap_ratio", "median_gps_accuracy_m",
-                "gps_point_count", "actual_route_wkt", "shortest_route_wkt",
+                "relative_detour_ratio", "overlap_ratio", "detour_threshold_ratio",
+                "maximum_equivalent_excess_distance_m", "minimum_overlap_ratio",
+                "median_gps_accuracy_m", "gps_point_count", "actual_route_wkt", "shortest_route_wkt",
                 "review_label", "review_notes");
         assertThat(records.get(1)[0]).isEqualTo(rideId.toString());
-        assertThat(records.get(1)[10]).contains(",");
-        assertThat(records.get(1)[12]).isEmpty();
-        assertThat(records.get(1)[13]).isEmpty();
+        assertThat(records.get(1)[8]).isEqualTo("0.1");
+        assertThat(records.get(1)[9]).isEqualTo("500.0");
+        assertThat(records.get(1)[10]).isEqualTo("0.3");
+        assertThat(records.get(1)[13]).contains(",");
+        assertThat(records.get(1)[15]).isEmpty();
+        assertThat(records.get(1)[16]).isEmpty();
         verify(query).setParameter("fromTime", 1_600_000_000_000L);
         verify(query).setParameter("toTime", 1_800_000_000_000L);
         verify(query).setParameter("perType", 50);
@@ -100,7 +105,7 @@ class RouteComparisonExportServiceTest {
             records = reader.readAll();
         }
 
-        assertThat(records.get(1)[8]).isEmpty();
-        assertThat(records.get(1)[9]).isEmpty();
+        assertThat(records.get(1)[11]).isEmpty();
+        assertThat(records.get(1)[12]).isEmpty();
     }
 }
