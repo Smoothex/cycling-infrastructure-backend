@@ -16,7 +16,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -119,7 +118,7 @@ public class RoadClosureDataProvider implements ExternalDataProvider {
         queryEnvelope.expandBy(PROXIMITY_DEGREES);
         List<RoadClosureEntry> candidates = spatialIndex.query(queryEnvelope);
 
-        List<SegmentExternalFactor> factors = new ArrayList<>();
+        Map<FactorKey, SegmentExternalFactor> factors = new LinkedHashMap<>();
 
         for (RoadClosureEntry entry : candidates) {
             // Proximity filter
@@ -138,25 +137,45 @@ public class RoadClosureDataProvider implements ExternalDataProvider {
             }
 
             // don't re-insert if we already have this factor
-            if (factorRepository.existsBySegmentIdAndFactorTypeAndValidFrom(segment.getId(), entry.factorType(), entry.validFrom())) {
+            if (factorRepository.existsBySegmentIdAndFactorTypeAndSourceAndValidFrom(
+                    segment.getId(), entry.factorType(), SOURCE, entry.validFrom())) {
                 continue;
             }
 
-            SegmentExternalFactor factor = new SegmentExternalFactor();
-            factor.setSegment(segment);
-            factor.setFactorType(entry.factorType());
-            factor.setSource(SOURCE);
-            factor.setValidFrom(entry.validFrom());
-            factor.setValidTo(entry.validTo());
-            factor.setAffectedArea(entry.geometry());
-            factor.setMetadata(entry.metadata());
-            factors.add(factor);
+            FactorKey key = new FactorKey(entry.factorType(), entry.validFrom());
+            SegmentExternalFactor factor = factors.get(key);
+            if (factor == null) {
+                factor = new SegmentExternalFactor();
+                factor.setSegment(segment);
+                factor.setFactorType(entry.factorType());
+                factor.setSource(SOURCE);
+                factor.setValidFrom(entry.validFrom());
+                factor.setValidTo(entry.validTo());
+                factor.setAffectedArea(entry.geometry());
+                factor.setMetadata(entry.metadata());
+                factors.put(key, factor);
+            } else {
+                factor.setValidTo(mergedValidTo(factor.getValidTo(), entry.validTo()));
+            }
         }
 
         if (!factors.isEmpty()) {
-            factorRepository.saveAll(factors);
+            factorRepository.saveAll(factors.values());
             log.debug("Saved {} road-closure factors for segment {}.", factors.size(), segment.getId());
         }
+    }
+
+    /**
+     * The persisted-factor constraint groups records by segment, type, source,
+     * and start time. Multiple VIZ entries can share that key, so represent their
+     * combined active period with the latest end; any open-ended entry keeps the
+     * merged factor open-ended.
+     */
+    private static Long mergedValidTo(Long current, Long candidate) {
+        if (current == null || candidate == null) {
+            return null;
+        }
+        return Math.max(current, candidate);
     }
 
     private boolean isStreetNameMatch(String streetSegmentName, Object externalFactorStreetName) {
@@ -192,4 +211,6 @@ public class RoadClosureDataProvider implements ExternalDataProvider {
             ExternalFactorType factorType,
             Map<String, Object> metadata
     ) {}
+
+    private record FactorKey(ExternalFactorType factorType, Long validFrom) {}
 }

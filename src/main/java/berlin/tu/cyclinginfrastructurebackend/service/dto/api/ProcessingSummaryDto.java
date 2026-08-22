@@ -16,6 +16,7 @@ public record ProcessingSummaryDto(
         long ohsomeEnrichedEvents,
         long berlinOpenDataEnrichedEvents,
         long trafficEnrichedEvents,
-        long trafficMeasuredEvents
+        long trafficMeasuredEvents,
+        long roadDisruptionAffectedEvents
 ) {
 }

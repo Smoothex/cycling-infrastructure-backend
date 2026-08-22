@@ -103,6 +103,29 @@ public interface SegmentEventRepository extends JpaRepository<SegmentEvent, UUID
     long countTrafficMeasuredEvents();
 
     /**
+     * Counts distinct events that overlap at least one active VIZ road disruption.
+     * The query starts from the much smaller factor set so PostgreSQL can use the
+     * segment-event index instead of scanning every event.
+     */
+    @Query(value = """
+            SELECT COUNT(DISTINCT se.id)
+            FROM segment_external_factors f
+            JOIN segment_events se
+              ON se.segment_id = f.segment_id
+             AND f.valid_from <= se.event_timestamp
+             AND (f.valid_to IS NULL OR f.valid_to >= se.event_timestamp)
+            WHERE f.source = 'berlin-open-data'
+              AND f.factor_type IN (
+                  'CONSTRUCTION',
+                  'ROAD_CLOSURE',
+                  'EVENT',
+                  'HAZARD',
+                  'INCIDENT'
+              )
+            """, nativeQuery = true)
+    long countRoadDisruptionAffectedEvents();
+
+    /**
      * The enrichment flags narrow to events actually carrying that enrichment;
      * trafficMeasured means an attached detector measurement (status ENRICHED).
      */
