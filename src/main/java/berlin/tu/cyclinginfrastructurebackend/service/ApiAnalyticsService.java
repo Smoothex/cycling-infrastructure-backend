@@ -92,7 +92,8 @@ public class ApiAnalyticsService {
                 segmentEventRepository.countByOhsomeEnriched(true),
                 segmentEventRepository.countByBerlinOpenDataEnriched(true),
                 segmentEventRepository.countByTrafficEnriched(true),
-                segmentEventRepository.countTrafficMeasuredEvents()
+                segmentEventRepository.countTrafficMeasuredEvents(),
+                segmentEventRepository.countRoadDisruptionAffectedEvents()
         );
     }
 

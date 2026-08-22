@@ -323,9 +323,14 @@ Overall counts: total rides, processed rides, total events, enrichment coverage 
     "ohsomeEnrichedEvents": 0,
     "berlinOpenDataEnrichedEvents": 187049,
     "trafficEnrichedEvents": 150575,
-    "trafficMeasuredEvents": 4263
+    "trafficMeasuredEvents": 4263,
+    "roadDisruptionAffectedEvents": 817
 }
 ```
+
+`berlinOpenDataEnrichedEvents` counts events for which the VIZ enrichment stage completed.
+`roadDisruptionAffectedEvents` counts distinct events whose segment and timestamp overlap at
+least one imported VIZ construction, closure, event, hazard, or incident.
 
 **`GET /api/analytics/pipeline-status`**  
 Per-stage pipeline health: ride processing status breakdown and per-enrichment-source pending/done counts.

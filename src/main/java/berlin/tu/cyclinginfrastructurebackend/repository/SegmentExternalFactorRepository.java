@@ -45,7 +45,12 @@ public interface SegmentExternalFactorRepository extends JpaRepository<SegmentEx
     );
 
     /** Check if an external factor already exist for this segment, type, and start time */
-    boolean existsBySegmentIdAndFactorTypeAndValidFrom(Long segmentId, ExternalFactorType factorType, Long validFrom);
+    boolean existsBySegmentIdAndFactorTypeAndSourceAndValidFrom(
+            Long segmentId,
+            ExternalFactorType factorType,
+            String source,
+            Long validFrom
+    );
 
     Optional<SegmentExternalFactor> findFirstBySegmentIdAndFactorTypeAndValidFrom(
             Long segmentId,

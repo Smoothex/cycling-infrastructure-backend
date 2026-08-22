@@ -62,6 +62,7 @@ class ApiAnalyticsServiceTest {
         when(rideRepository.count()).thenReturn(10L);
         when(rideRepository.countByStatus(Status.PROCESSED)).thenReturn(7L);
         when(rideRepository.countByRouteComparisonType(RouteComparisonType.LOCAL_DETOUR)).thenReturn(4L);
+        when(segmentEventRepository.countRoadDisruptionAffectedEvents()).thenReturn(11L);
 
         ProcessingSummaryDto result = service.getProcessingSummary();
 
@@ -69,6 +70,7 @@ class ApiAnalyticsServiceTest {
         assertThat(result.routeComparisonTypeCounts().get("LOCAL_DETOUR")).isEqualTo(4L);
         assertThat(result.routeComparisonTypeCounts()).containsKeys(
                 "EQUIVALENT_ROUTE", "LOCAL_DETOUR", "CORRIDOR_ALTERNATIVE");
+        assertThat(result.roadDisruptionAffectedEvents()).isEqualTo(11L);
     }
 
     @Test

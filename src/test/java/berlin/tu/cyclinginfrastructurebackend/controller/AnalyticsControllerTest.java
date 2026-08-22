@@ -46,13 +46,14 @@ class AnalyticsControllerTest {
         when(analyticsService.getProcessingSummary()).thenReturn(new ProcessingSummaryDto(
                 10, Map.of("PROCESSED", 7L), Map.of("LOCAL_DETOUR", 4L),
                 20, 12, 30, 1000L, 2000L,
-                Map.of("AVOIDANCE", 18L, "PREFERENCE", 12L), 5, 6, 7, 8, 9));
+                Map.of("AVOIDANCE", 18L, "PREFERENCE", 12L), 5, 6, 7, 8, 9, 10));
 
         mockMvc.perform(get("/api/analytics/summary"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalRides").value(10))
                 .andExpect(jsonPath("$.rideStatusCounts.PROCESSED").value(7))
-                .andExpect(jsonPath("$.routeComparisonTypeCounts.LOCAL_DETOUR").value(4));
+                .andExpect(jsonPath("$.routeComparisonTypeCounts.LOCAL_DETOUR").value(4))
+                .andExpect(jsonPath("$.roadDisruptionAffectedEvents").value(10));
     }
 
     @Test
