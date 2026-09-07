@@ -4,7 +4,9 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,7 +25,9 @@ public class PipelineWorkClaimService {
         this.entityManager = entityManager;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
+    // Recover and commit before Spring registers scheduled tasks on context refresh.
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    @EventListener(ContextRefreshedEvent.class)
     @Transactional
     public void resetInterruptedWork() {
         int weatherInitialized = initializeEnrichmentStatus("weather_processing_status", "weather_enriched");

@@ -7,28 +7,17 @@ import org.springframework.stereotype.Component;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.time.YearMonth;
-import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.List;
 
-/**
- * Configuration for the immutable monthly ohsome v2 snapshot dataset.
- *
- * <p>The defaults deliberately describe one versioned dataset. Changing its
- * temporal range, AOI, filter, or clipping behavior makes it a different
- * dataset and is detected through the on-disk manifest.</p>
- */
+/** Configuration for demand-driven, buffered tile/month snapshots. */
 @Component
 @ConfigurationProperties(prefix = "ohsome.v2")
 public class OhsomeV2Properties implements InitializingBean {
 
     private URI baseUrl = URI.create("https://api.heigit.org/ohsome-api-staging/v2");
     private String apiKey = "";
-    private Path cachePath = Path.of("./data/ohsome/v2/berlin-10km-monthly-v1");
-    private String startMonth = "2019-01";
-    private String endMonth = "2025-01";
-    private List<Double> bbox = new ArrayList<>(List.of(12.94, 52.24, 13.91, 52.77));
+    private Path cachePath = Path.of("./data/ohsome/v2/tiles-v1");
+    private double gridSizeDegrees = 0.1;
+    private double bufferDegrees = 0.01;
     private String filter = "type:way and highway=*";
     private boolean clip = false;
     private Duration downloadInterval = Duration.ofSeconds(60);
@@ -50,20 +39,14 @@ public class OhsomeV2Properties implements InitializingBean {
         if (cachePath == null) {
             throw new IllegalArgumentException("ohsome.v2.cache-path must be set");
         }
-        YearMonth start = parseMonth(startMonth, "ohsome.v2.start-month");
-        YearMonth end = parseMonth(endMonth, "ohsome.v2.end-month");
-        if (end.isBefore(start)) {
-            throw new IllegalArgumentException("ohsome.v2.end-month must not precede start-month");
+        if (!Double.isFinite(gridSizeDegrees) || gridSizeDegrees <= 0) {
+            throw new IllegalArgumentException("ohsome.v2.grid-size-degrees must be finite and positive");
         }
-        if (bbox == null || bbox.size() != 4 || bbox.stream().anyMatch(value -> value == null || !Double.isFinite(value))) {
-            throw new IllegalArgumentException("ohsome.v2.bbox must contain xmin,ymin,xmax,ymax");
+        if (!Double.isFinite(bufferDegrees) || bufferDegrees < 0) {
+            throw new IllegalArgumentException("ohsome.v2.buffer-degrees must be finite and non-negative");
         }
-        double xmin = bbox.get(0);
-        double ymin = bbox.get(1);
-        double xmax = bbox.get(2);
-        double ymax = bbox.get(3);
-        if (xmin < -180 || xmax > 180 || ymin < -90 || ymax > 90 || xmin >= xmax || ymin >= ymax) {
-            throw new IllegalArgumentException("ohsome.v2.bbox is not a valid WGS84 bounding box");
+        if (clip) {
+            throw new IllegalArgumentException("ohsome.v2.clip must be false to preserve full ways at tile boundaries");
         }
         if (filter == null || filter.isBlank()) {
             throw new IllegalArgumentException("ohsome.v2.filter must not be blank");
@@ -81,45 +64,9 @@ public class OhsomeV2Properties implements InitializingBean {
         }
     }
 
-    public YearMonth startMonthValue() {
-        return parseMonth(startMonth, "ohsome.v2.start-month");
-    }
-
-    public YearMonth endMonthValue() {
-        return parseMonth(endMonth, "ohsome.v2.end-month");
-    }
-
-    public List<YearMonth> months() {
-        YearMonth current = startMonthValue();
-        YearMonth end = endMonthValue();
-        List<YearMonth> result = new ArrayList<>();
-        while (!current.isAfter(end)) {
-            result.add(current);
-            current = current.plusMonths(1);
-        }
-        return List.copyOf(result);
-    }
-
-    public boolean supports(YearMonth month) {
-        return month != null && !month.isBefore(startMonthValue()) && !month.isAfter(endMonthValue());
-    }
-
-    public boolean containsCoordinate(double longitude, double latitude) {
-        return longitude >= bbox.get(0) && longitude <= bbox.get(2)
-                && latitude >= bbox.get(1) && latitude <= bbox.get(3);
-    }
-
     public URI extractionUri() {
         String value = baseUrl.toString();
         return URI.create((value.endsWith("/") ? value : value + "/") + "extraction/features.parquet");
-    }
-
-    private static YearMonth parseMonth(String value, String propertyName) {
-        try {
-            return YearMonth.parse(value);
-        } catch (DateTimeParseException | NullPointerException exception) {
-            throw new IllegalArgumentException(propertyName + " must use yyyy-MM", exception);
-        }
     }
 
     private static void requirePositive(Duration value, String propertyName) {
@@ -158,29 +105,13 @@ public class OhsomeV2Properties implements InitializingBean {
         this.cachePath = cachePath;
     }
 
-    public String getStartMonth() {
-        return startMonth;
-    }
+    public double getGridSizeDegrees() { return gridSizeDegrees; }
 
-    public void setStartMonth(String startMonth) {
-        this.startMonth = startMonth;
-    }
+    public void setGridSizeDegrees(double gridSizeDegrees) { this.gridSizeDegrees = gridSizeDegrees; }
 
-    public String getEndMonth() {
-        return endMonth;
-    }
+    public double getBufferDegrees() { return bufferDegrees; }
 
-    public void setEndMonth(String endMonth) {
-        this.endMonth = endMonth;
-    }
-
-    public List<Double> getBbox() {
-        return List.copyOf(bbox);
-    }
-
-    public void setBbox(List<Double> bbox) {
-        this.bbox = bbox == null ? null : new ArrayList<>(bbox);
-    }
+    public void setBufferDegrees(double bufferDegrees) { this.bufferDegrees = bufferDegrees; }
 
     public String getFilter() {
         return filter;

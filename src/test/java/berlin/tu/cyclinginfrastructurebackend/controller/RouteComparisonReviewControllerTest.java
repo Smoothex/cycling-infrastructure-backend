@@ -91,6 +91,45 @@ class RouteComparisonReviewControllerTest {
     }
 
     @Test
+    void rideEndpointReturnsAnArbitraryEligibleRouteComparison() throws Exception {
+        UUID rideId = UUID.randomUUID();
+        when(service.getRideDetail(rideId)).thenReturn(new RouteReviewDetailDto(
+                rideId,
+                0,
+                0,
+                RouteComparisonType.CORRIDOR_ALTERNATIVE,
+                1_700_000_000_000L,
+                1_700_000_060_000L,
+                60L,
+                "COMMUTE",
+                "CITY_TREKKING_BIKE",
+                1_500.0,
+                1_000.0,
+                500.0,
+                0.50,
+                0.20,
+                7.5,
+                42L,
+                0.10,
+                500.0,
+                0.30,
+                null,
+                null,
+                List.of(),
+                null));
+
+        mockMvc.perform(get("/api/route-comparisons/rides/{rideId}", rideId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rideId").value(rideId.toString()))
+                .andExpect(jsonPath("$.sampleOrder").value(0))
+                .andExpect(jsonPath("$.classSampleRank").value(0))
+                .andExpect(jsonPath("$.automatedClassification")
+                        .value("CORRIDOR_ALTERNATIVE"));
+
+        verify(service).getRideDetail(rideId);
+    }
+
+    @Test
     void reviewEndpointAcceptsManualClassification() throws Exception {
         UUID rideId = UUID.randomUUID();
         when(service.saveReview(any(), any())).thenReturn(new RouteReviewDto(

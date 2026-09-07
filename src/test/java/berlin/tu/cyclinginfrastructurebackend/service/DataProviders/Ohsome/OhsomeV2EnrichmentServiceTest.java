@@ -22,11 +22,12 @@ import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -40,11 +41,7 @@ class OhsomeV2EnrichmentServiceTest {
     private static final GeometryFactory GEOMETRY_FACTORY = new GeometryFactory();
     private static final YearMonth JANUARY = YearMonth.of(2024, 1);
     private static final long SUPPORTED_FROM = monthStart(JANUARY);
-    private static final long SUPPORTED_TO_EXCLUSIVE = monthStart(JANUARY.plusMonths(1));
-    private static final double MIN_LON = 13.0;
-    private static final double MIN_LAT = 52.0;
-    private static final double MAX_LON = 14.0;
-    private static final double MAX_LAT = 53.0;
+    private static final OhsomeTile TILE = new OhsomeTile(132, 524);
     private static final int BATCH_SIZE = 25;
     private static final OhsomeEnrichmentBatchRepository.ProcessingCounts NO_PROCESSING_COUNTS =
             new OhsomeEnrichmentBatchRepository.ProcessingCounts(0, 0, 0, 0, 0);
@@ -67,9 +64,6 @@ class OhsomeV2EnrichmentServiceTest {
         pipelineActivityTracker = new PipelineActivityTracker();
 
         OhsomeV2Properties properties = new OhsomeV2Properties();
-        properties.setStartMonth(JANUARY.toString());
-        properties.setEndMonth(JANUARY.toString());
-        properties.setBbox(List.of(MIN_LON, MIN_LAT, MAX_LON, MAX_LAT));
         properties.validate();
 
         service = new OhsomeV2EnrichmentService(
@@ -82,9 +76,6 @@ class OhsomeV2EnrichmentServiceTest {
                 tileBuildService,
                 pipelineActivityTracker);
 
-        when(batchRepository.finalizeUnsupported(
-                SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, MIN_LON, MIN_LAT, MAX_LON, MAX_LAT))
-                .thenReturn(new OhsomeEnrichmentBatchRepository.UnsupportedCounts(0, 0));
         when(batchRepository.processingCounts()).thenReturn(NO_PROCESSING_COUNTS);
     }
 
@@ -98,61 +89,44 @@ class OhsomeV2EnrichmentServiceTest {
         assertThat(summary.processedPairs()).isZero();
         assertThat(summary.elapsed()).isZero();
         assertThat(pipelineActivityTracker.isActive()).isFalse();
-        verify(batchRepository, never()).finalizeUnsupported(
-                anyLong(), anyLong(), org.mockito.ArgumentMatchers.anyDouble(),
-                org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyDouble(),
-                org.mockito.ArgumentMatchers.anyDouble());
+        verify(batchRepository, never()).markInvalidPendingEvents();
         verify(batchRepository, never()).processingCounts();
         verifyNoInteractions(snapshotCache, snapshotReader, streetSegmentRepository, tileBuildService);
     }
 
     @Test
-    void finalizesUnsupportedEventsBeforeOpeningTheCache() throws Exception {
+    void invalidEventsAreFinalizedWithoutOpeningTheCache() {
         givenSupportedWorkRemains();
-        OhsomeEnrichmentBatchRepository.UnsupportedCounts unsupported =
-                new OhsomeEnrichmentBatchRepository.UnsupportedCounts(2, 3);
-        when(batchRepository.finalizeUnsupported(
-                SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, MIN_LON, MIN_LAT, MAX_LON, MAX_LAT))
-                .thenReturn(unsupported);
-        when(snapshotCache.ensureReady()).thenReturn(new OhsomeSnapshotCatalog(Map.of()));
-        when(batchRepository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, BATCH_SIZE))
-                .thenReturn(List.of());
+        when(batchRepository.markInvalidPendingEvents()).thenReturn(5);
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE)).thenReturn(Optional.empty());
 
-        OhsomeV2EnrichmentService.DrainSummary summary = service.drainPending(BATCH_SIZE);
+        var summary = service.drainPending(BATCH_SIZE);
 
-        InOrder order = inOrder(batchRepository, snapshotCache);
-        order.verify(batchRepository).hasPendingWork();
-        order.verify(batchRepository).finalizeUnsupported(
-                SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, MIN_LON, MIN_LAT, MAX_LON, MAX_LAT);
-        order.verify(batchRepository).hasPendingWork();
-        order.verify(snapshotCache).ensureReady();
-        order.verify(batchRepository).claimNextBatch(
-                SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, BATCH_SIZE);
         assertThat(summary.completed()).isTrue();
-        assertThat(summary.outsideTimeRange()).isEqualTo(2);
-        assertThat(summary.outsideArea()).isEqualTo(3);
-        verify(tileBuildService, times(1)).markDataChanged();
-        verifyNoInteractions(snapshotReader, streetSegmentRepository);
+        assertThat(summary.invalidEvents()).isEqualTo(5);
+        verify(tileBuildService).markDataChanged();
+        verifyNoInteractions(snapshotCache, snapshotReader, streetSegmentRepository);
     }
 
     @Test
-    void cacheFailureClaimsNothingAndLeavesSupportedEventsPending() {
+    void cacheFailureReleasesClaimedEventsAndStopsTheDrain() {
         givenSupportedWorkRemains();
-        OhsomeSnapshotCacheException failure = new OhsomeSnapshotCacheException(
-                OhsomeSnapshotCacheException.FailureKind.LOCAL_IO, "cache unavailable");
-        when(snapshotCache.ensureReady()).thenThrow(failure);
+        List<OhsomeWorkItem> items = List.of(new OhsomeWorkItem(10, JANUARY));
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE)).thenReturn(claim(items));
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenThrow(new OhsomeSnapshotCacheException(
+                OhsomeSnapshotCacheException.FailureKind.LOCAL_IO, "cache unavailable"));
+        when(batchRepository.releaseBatch(items)).thenReturn(7);
         when(batchRepository.processingCounts()).thenReturn(
                 new OhsomeEnrichmentBatchRepository.ProcessingCounts(7, 0, 0, 0, 0));
 
-        OhsomeV2EnrichmentService.DrainSummary summary = service.drainPending(BATCH_SIZE);
+        var summary = service.drainPending(BATCH_SIZE);
 
         assertThat(summary.completed()).isFalse();
         assertThat(summary.cacheFailure()).isEqualTo("LOCAL_IO");
-        assertThat(summary.pendingEvents()).isEqualTo(7);
-        assertThat(summary.processingEvents()).isZero();
-        verify(batchRepository, never()).claimNextBatch(anyLong(), anyLong(), anyInt());
+        assertThat(summary.releasedEvents()).isEqualTo(7);
+        verify(batchRepository).releaseBatch(items);
+        verify(batchRepository, times(1)).claimNextBatch(anyDouble(), anyInt());
         verify(batchRepository, never()).finalizeBatch(anyList());
-        verify(batchRepository, never()).releaseBatch(anyList());
         verifyNoInteractions(snapshotReader, streetSegmentRepository, tileBuildService);
     }
 
@@ -160,10 +134,10 @@ class OhsomeV2EnrichmentServiceTest {
     void finalizesMatchedAmbiguousNoMatchAndErrorResultsInOneMappedBatch() throws Exception {
         givenSupportedWorkRemains();
         Path snapshotPath = Path.of("january.parquet");
-        when(snapshotCache.ensureReady()).thenReturn(catalog(snapshotPath));
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenReturn(cached(snapshotPath));
 
         LineString matchedLine = eastWestLine(52.40, 13.20, 13.201);
-        LineString ambiguousLine = eastWestLine(52.60, 13.50, 13.501);
+        LineString ambiguousLine = eastWestLine(52.401, 13.202, 13.203);
         Map<String, String> matchedTags = Map.ofEntries(
                 Map.entry("name", "Matched Street"),
                 Map.entry("surface", "asphalt"),
@@ -185,18 +159,16 @@ class OhsomeV2EnrichmentServiceTest {
                 new OhsomeWorkItem(20, JANUARY),
                 new OhsomeWorkItem(30, JANUARY),
                 new OhsomeWorkItem(40, JANUARY));
-        when(batchRepository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, BATCH_SIZE))
-                .thenReturn(workItems, List.of());
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE))
+                .thenReturn(claim(workItems), Optional.empty());
         StreetSegment matched = segment(10, "Matched Street", matchedLine);
         StreetSegment ambiguous = segment(20, null, ambiguousLine);
-        StreetSegment unmatched = segment(30, null, eastWestLine(52.80, 13.80, 13.801));
+        StreetSegment unmatched = segment(30, null, eastWestLine(52.402, 13.204, 13.205));
         StreetSegment missingGeometry = segment(40, "Broken", null);
         when(streetSegmentRepository.findAllById(List.of(10L, 20L, 30L, 40L)))
                 .thenReturn(List.of(matched, ambiguous, unmatched, missingGeometry));
         when(batchRepository.finalizeBatch(anyList())).thenReturn(9);
-        when(batchRepository.finalizeUnsupported(
-                SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, MIN_LON, MIN_LAT, MAX_LON, MAX_LAT))
-                .thenReturn(new OhsomeEnrichmentBatchRepository.UnsupportedCounts(1, 2));
+        when(batchRepository.markInvalidPendingEvents()).thenReturn(3);
         when(batchRepository.processingCounts()).thenReturn(
                 new OhsomeEnrichmentBatchRepository.ProcessingCounts(0, 0, 4, 4, 1));
 
@@ -224,8 +196,7 @@ class OhsomeV2EnrichmentServiceTest {
         assertThat(summary.unmatchedPairs()).isEqualTo(1);
         assertThat(summary.errorPairs()).isEqualTo(1);
         assertThat(summary.updatedEvents()).isEqualTo(9);
-        assertThat(summary.outsideTimeRange()).isEqualTo(1);
-        assertThat(summary.outsideArea()).isEqualTo(2);
+        assertThat(summary.invalidEvents()).isEqualTo(3);
         verify(snapshotReader, times(1)).read(snapshotPath);
         verify(tileBuildService, times(1)).markDataChanged();
     }
@@ -235,9 +206,9 @@ class OhsomeV2EnrichmentServiceTest {
         givenSupportedWorkRemains();
         Path snapshotPath = Path.of("corrupt-january.parquet");
         List<OhsomeWorkItem> workItems = List.of(new OhsomeWorkItem(10, JANUARY));
-        when(snapshotCache.ensureReady()).thenReturn(catalog(snapshotPath));
-        when(batchRepository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, BATCH_SIZE))
-                .thenReturn(workItems);
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenReturn(cached(snapshotPath));
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE))
+                .thenReturn(claim(workItems));
         when(snapshotReader.read(snapshotPath)).thenThrow(new IOException("corrupt snapshot"));
         when(batchRepository.releaseBatch(workItems)).thenReturn(3);
         when(batchRepository.processingCounts()).thenReturn(
@@ -260,15 +231,15 @@ class OhsomeV2EnrichmentServiceTest {
         givenSupportedWorkRemains();
         Path snapshotPath = Path.of("january.parquet");
         LineString firstLine = eastWestLine(52.40, 13.20, 13.201);
-        LineString secondLine = eastWestLine(52.60, 13.50, 13.501);
+        LineString secondLine = eastWestLine(52.401, 13.202, 13.203);
         OhsomeSnapshot snapshot = new OhsomeSnapshot(List.of(
                 new OhsomeFeature(100, firstLine, Map.of("name", "First Street", "surface", "asphalt")),
                 new OhsomeFeature(200, secondLine, Map.of("name", "Second Street", "surface", "paved"))));
         List<OhsomeWorkItem> firstBatch = List.of(new OhsomeWorkItem(10, JANUARY));
         List<OhsomeWorkItem> failingBatch = List.of(new OhsomeWorkItem(20, JANUARY));
-        when(snapshotCache.ensureReady()).thenReturn(catalog(snapshotPath));
-        when(batchRepository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, BATCH_SIZE))
-                .thenReturn(firstBatch, failingBatch);
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenReturn(cached(snapshotPath));
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE))
+                .thenReturn(claim(firstBatch), claim(failingBatch));
         when(snapshotReader.read(snapshotPath)).thenReturn(snapshot);
         when(streetSegmentRepository.findAllById(List.of(10L)))
                 .thenReturn(List.of(segment(10, "First Street", firstLine)));
@@ -298,19 +269,86 @@ class OhsomeV2EnrichmentServiceTest {
         verify(tileBuildService, times(1)).markDataChanged();
     }
 
+    @Test
+    void separateGermanCitiesUseTheirOwnSnapshotAndAllEventMonths() throws Exception {
+        givenSupportedWorkRemains();
+        // Include months on both sides of the former configured study period.
+        OhsomeClaim berlin = cityClaim(10, new OhsomeTile(134, 525), YearMonth.of(2018, 12));
+        OhsomeClaim hamburg = cityClaim(20, new OhsomeTile(99, 535), JANUARY);
+        OhsomeClaim munich = cityClaim(30, new OhsomeTile(115, 481), YearMonth.of(2026, 2));
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE))
+                .thenReturn(Optional.of(berlin), Optional.of(hamburg), Optional.of(munich), Optional.empty());
+        List<LineString> lines = List.of(eastWestLine(52.52, 13.40, 13.401),
+                eastWestLine(53.55, 9.99, 9.991), eastWestLine(48.13, 11.57, 11.571));
+        List<OhsomeClaim> claims = List.of(berlin, hamburg, munich);
+        for (int i = 0; i < claims.size(); i++) {
+            OhsomeClaim claim = claims.get(i);
+            long id = claim.items().getFirst().segmentId();
+            Path path = Path.of(claim.tile().id(), claim.month() + ".parquet");
+            when(snapshotCache.ensureSnapshot(claim.tile(), claim.month())).thenReturn(cached(path));
+            when(snapshotReader.read(path)).thenReturn(new OhsomeSnapshot(List.of(
+                    new OhsomeFeature(id, lines.get(i), Map.of("surface", "asphalt")))));
+            when(streetSegmentRepository.findAllById(List.of(id)))
+                    .thenReturn(List.of(segment(id, null, lines.get(i))));
+        }
+        when(batchRepository.finalizeBatch(anyList())).thenReturn(1);
+
+        var summary = service.drainPending(BATCH_SIZE);
+
+        assertThat(summary.matchedPairs()).isEqualTo(3);
+        assertThat(summary.loadedSnapshots()).isEqualTo(3);
+        assertThat(summary.completed()).isTrue();
+        for (OhsomeClaim claim : claims) {
+            verify(snapshotCache).ensureSnapshot(claim.tile(), claim.month());
+        }
+        verify(batchRepository, never()).releaseBatch(anyList());
+    }
+
+    @Test
+    void permanentlyRejectedTileDoesNotBlockAnotherCity() throws Exception {
+        givenSupportedWorkRemains();
+        OhsomeClaim rejected = cityClaim(10, TILE, JANUARY);
+        OhsomeClaim other = cityClaim(20, new OhsomeTile(99, 535), JANUARY);
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE))
+                .thenReturn(Optional.of(rejected), Optional.of(other), Optional.empty());
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenThrow(new OhsomeSnapshotCacheException(
+                OhsomeSnapshotCacheException.FailureKind.INVALID_REQUEST, "rejected"));
+        Path path = Path.of("hamburg.parquet");
+        when(snapshotCache.ensureSnapshot(other.tile(), JANUARY)).thenReturn(cached(path));
+        when(snapshotReader.read(path)).thenReturn(new OhsomeSnapshot(List.of()));
+        when(streetSegmentRepository.findAllById(List.of(20L)))
+                .thenReturn(List.of(segment(20, null, eastWestLine(53.55, 9.99, 9.991))));
+        when(batchRepository.finalizeBatch(anyList())).thenReturn(1);
+
+        var summary = service.drainPending(BATCH_SIZE);
+
+        verify(batchRepository).finalizeBatch(List.of(OhsomeBatchResult.error(rejected.items().getFirst())));
+        verify(batchRepository).finalizeBatch(List.of(OhsomeBatchResult.noData(other.items().getFirst())));
+        assertThat(summary.errorPairs()).isEqualTo(1);
+        assertThat(summary.unmatchedPairs()).isEqualTo(1);
+        assertThat(summary.completed()).isTrue();
+    }
+
+    private OhsomeClaim cityClaim(long id, OhsomeTile tile, YearMonth month) {
+        return new OhsomeClaim(tile, month, List.of(new OhsomeWorkItem(id, month)));
+    }
+
+    private Optional<OhsomeClaim> claim(List<OhsomeWorkItem> items) {
+        return Optional.of(new OhsomeClaim(TILE, JANUARY, items));
+    }
+
     private void givenSupportedWorkRemains() {
         when(batchRepository.hasPendingWork()).thenReturn(true, true);
     }
 
-    private OhsomeSnapshotCatalog catalog(Path path) {
-        OhsomeCachedSnapshot cached = new OhsomeCachedSnapshot(
+    private OhsomeCachedSnapshot cached(Path path) {
+        return new OhsomeCachedSnapshot(
                 JANUARY,
                 Instant.ofEpochMilli(SUPPORTED_FROM),
                 path,
                 1,
                 "sha256",
                 new OhsomeSnapshotMetadata(1, "2.0", "1.1.0", "EPSG:4326"));
-        return new OhsomeSnapshotCatalog(Map.of(JANUARY, cached));
     }
 
     private StreetSegment segment(long id, String name, LineString geometry) {

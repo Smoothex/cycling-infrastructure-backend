@@ -39,9 +39,6 @@ import java.util.function.Consumer;
 @Component
 public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
 
-    private static final List<String> REQUIRED_COLUMNS =
-            List.of("osm_id", "osm_tags", "geom_type", "geom");
-
     private final ObjectMapper objectMapper;
 
     public OhsomeGeoParquetReader() {
@@ -83,9 +80,10 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
         try (ParquetFileReader reader = new ParquetFileReader(new LocalInputFile(snapshot), readOptions)) {
             ParquetMetadata footer = reader.getFooter();
             MessageType fileSchema = footer.getFileMetaData().getSchema();
-            validateSchema(fileSchema);
+            String tagsColumn = fileSchema.containsField("tags") ? "tags" : "osm_tags";
+            validateSchema(fileSchema, tagsColumn);
             OhsomeSnapshotMetadata metadata = metadata(footer, reader.getRecordCount());
-            MessageType requestedSchema = requestedSchema(fileSchema);
+            MessageType requestedSchema = requestedSchema(fileSchema, tagsColumn);
             reader.setRequestedSchema(requestedSchema);
 
             MessageColumnIO columnIO = new ColumnIOFactory().getColumnIO(requestedSchema, fileSchema);
@@ -98,7 +96,7 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
                 for (long row = 0; row < pages.getRowCount(); row++) {
                     Group group = recordReader.read();
                     rowsRead++;
-                    OhsomeFeature feature = readFeature(group, wkbReader, snapshot, rowsRead);
+                    OhsomeFeature feature = readFeature(group, wkbReader, snapshot, rowsRead, tagsColumn);
                     if (feature != null) {
                         featureConsumer.accept(feature);
                     }
@@ -115,8 +113,8 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
         }
     }
 
-    private void validateSchema(MessageType schema) throws IOException {
-        for (String column : REQUIRED_COLUMNS) {
+    private void validateSchema(MessageType schema, String tagsColumn) throws IOException {
+        for (String column : requiredColumns(tagsColumn)) {
             if (!schema.containsField(column)) {
                 throw new IOException("Ohsome GeoParquet is missing required column: " + column);
             }
@@ -126,13 +124,13 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
         requirePrimitive(schema, "geom_type", PrimitiveType.PrimitiveTypeName.BINARY);
         requirePrimitive(schema, "geom", PrimitiveType.PrimitiveTypeName.BINARY);
 
-        Type tags = schema.getType("osm_tags");
+        Type tags = schema.getType(tagsColumn);
         if (tags.isPrimitive() || tags.getOriginalType() != org.apache.parquet.schema.OriginalType.MAP) {
-            throw new IOException("Ohsome GeoParquet column osm_tags must use Parquet MAP encoding");
+            throw new IOException("Ohsome GeoParquet column " + tagsColumn + " must use Parquet MAP encoding");
         }
-        if (!schema.containsPath(new String[]{"osm_tags", "key_value", "key"})
-                || !schema.containsPath(new String[]{"osm_tags", "key_value", "value"})) {
-            throw new IOException("Ohsome GeoParquet osm_tags MAP has an unsupported physical layout");
+        if (!schema.containsPath(new String[]{tagsColumn, "key_value", "key"})
+                || !schema.containsPath(new String[]{tagsColumn, "key_value", "value"})) {
+            throw new IOException("Ohsome GeoParquet " + tagsColumn + " MAP has an unsupported physical layout");
         }
     }
 
@@ -145,11 +143,15 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
         }
     }
 
-    private MessageType requestedSchema(MessageType fileSchema) {
+    private MessageType requestedSchema(MessageType fileSchema, String tagsColumn) {
         return new MessageType(
                 fileSchema.getName(),
-                REQUIRED_COLUMNS.stream().map(fileSchema::getType).toList()
+                requiredColumns(tagsColumn).stream().map(fileSchema::getType).toList()
         );
+    }
+
+    private List<String> requiredColumns(String tagsColumn) {
+        return List.of("osm_id", tagsColumn, "geom_type", "geom");
     }
 
     private OhsomeSnapshotMetadata metadata(ParquetMetadata footer, long featureCount)
@@ -160,7 +162,8 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
 
         Map<String, String> keyValues = footer.getFileMetaData().getKeyValueMetaData();
         JsonNode geo = parseRequiredMetadata(keyValues, "geo");
-        JsonNode api = parseRequiredMetadata(keyValues, "api");
+        // Current v2 uses "ohsome API"; retain support for existing cached snapshots.
+        JsonNode api = parseRequiredMetadata(keyValues, keyValues.containsKey("ohsome API") ? "ohsome API" : "api");
 
         String geoVersion = requiredText(geo, "version", "GeoParquet version");
         String primaryColumn = requiredText(geo, "primary_column", "GeoParquet primary column");
@@ -206,7 +209,8 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
     private OhsomeFeature readFeature(Group group,
                                       WKBReader wkbReader,
                                       Path snapshot,
-                                      long rowNumber) throws IOException {
+                                      long rowNumber,
+                                      String tagsColumn) throws IOException {
         if (group.getFieldRepetitionCount("geom_type") == 0
                 || !"LineString".equals(group.getString("geom_type", 0))) {
             return null;
@@ -230,15 +234,15 @@ public class OhsomeGeoParquetReader implements OhsomeSnapshotValidator {
         return new OhsomeFeature(
                 group.getLong("osm_id", 0),
                 lineString,
-                readTags(group)
+                readTags(group, tagsColumn)
         );
     }
 
-    private Map<String, String> readTags(Group group) {
-        if (group.getFieldRepetitionCount("osm_tags") == 0) {
+    private Map<String, String> readTags(Group group, String tagsColumn) {
+        if (group.getFieldRepetitionCount(tagsColumn) == 0) {
             return Map.of();
         }
-        Group tagsGroup = group.getGroup("osm_tags", 0);
+        Group tagsGroup = group.getGroup(tagsColumn, 0);
         int entryCount = tagsGroup.getFieldRepetitionCount("key_value");
         Map<String, String> tags = new HashMap<>(Math.max(16, entryCount * 2));
         for (int index = 0; index < entryCount; index++) {

@@ -141,15 +141,20 @@ batches. Existing factors are retained and deduplicated.
 
 **Source:** `https://api.heigit.org/ohsome-api-staging/v2/extraction/features.parquet`
 
-The backend downloads 73 historical GeoParquet snapshots: one at `00:00:00Z` on the first day of every month from January 2019 through January 2025. Each request covers Berlin plus an approximately 10 km buffer (`[12.94, 52.24, 13.91, 52.77]`), uses the filter `type:way and highway=*`, and sets `clip=false` so that complete intersecting road geometries are retained.
+The backend downloads historical GeoParquet snapshots on demand for local tile/month groups. Segments are assigned
+by their geometric midpoint (`ST_LineInterpolatePoint(geometry, 0.5)`) to a 0.1° grid with origin (0, 0), using
+`floor(longitude / size)` and `floor(latitude / size)`. Each tile's request bbox includes a 0.01° buffer.
+Requests use `type:way and highway=*` and require `clip=false` to retain complete intersecting road geometries.
+There is no list of supported cities, Berlin bbox, or configured date window. All pending event months are eligible;
+actual historical availability is determined by the API.
 
-This is a deliberate monthly approximation. An event is matched against the snapshot at the start of its UTC calendar month, rather than against an exact event-time API response. The assigned tags can therefore lag an OSM edit made later in that month. Events outside the configured time range or area are finalized without OSM attributes instead of being assigned a misleading snapshot.
+This is a deliberate monthly approximation. An event is matched against the snapshot at the start of its UTC calendar month, rather than against an exact event-time API response. The assigned tags can therefore lag an OSM edit made later in that month. An event outside Berlin is processed using its own tile. Missing timestamps and unusable segment geometries become `ERROR`.
 
 ### Snapshot cache
 
-Snapshots are stored below `./data/ohsome/v2/berlin-10km-monthly-v1/`, which is excluded from Git and mounted at `/app/data` in Docker. `manifest.json` records the dataset parameters and the checksum, size, retrieval time, and timestamp of each `snapshots/YYYY-MM.parquet` file.
+Snapshots are stored at `./data/ohsome/v2/tiles-v1/{x}_{y}/YYYY-MM.parquet`, excluded from Git and mounted below `/app/data` in Docker. Each tile has a `manifest.json` recording its buffered bounds, grid/buffer settings, filter, clipping, and each file’s checksum, size, retrieval time, and timestamp. Changing these parameters requires a fresh compatible cache directory. The legacy Berlin cache is not reused or deleted.
 
-Before claiming Ohsome events, the backend validates the complete cache. Missing snapshots are fetched sequentially with the HeiGIT key from `HEIGIT_API_KEY`, first written as `.parquet.part`, validated and checksummed, and then moved atomically into place. Valid cached files are never fetched again and a complete cache can be used without an API key. There is no Ohsome v1 fallback.
+Each claim contains at most the configured number of distinct segments in one tile and UTC month. Only its snapshot is validated or downloaded, using `HEIGIT_API_KEY` for missing files. Downloads are sequential, first written as `.parquet.part`, validated and checksummed, and moved atomically into place. Valid cached files work offline without an API key. Only the current tile/month spatial index is retained in memory. There is no Ohsome v1 fallback.
 
 Docker Compose reads `HEIGIT_API_KEY=...` from the repository's `.env` file and passes it into the backend container. When running Spring directly on the host, export the same environment variable before starting the application; Spring does not load the Compose `.env` file itself. The key is never written to the manifest or logs.
 
@@ -163,10 +168,10 @@ All events for the selected segment/month pair receive the same result in one da
 |---|---|---|
 | Reliable feature match | `DONE` | `true` |
 | No reliable or unambiguous match | `DONE` | `false` |
-| Outside the supported time range or area | `DONE` | `false` |
+| Missing timestamp, invalid geometry, or permanently rejected snapshot request | `ERROR` | `false` |
 | Unexpected processing failure | `ERROR` | `false` |
 
-A missing or invalid snapshot prevents any supported Ohsome work from being claimed until the complete 73-file cache is ready. This avoids mixing partial snapshot datasets and leaves the work `PENDING` for a later retry.
+A transient download or snapshot-read failure releases the claim to `PENDING` and stops the current drain for a later retry. Authentication failures also stop the drain. A permanently rejected request marks only that claim `ERROR` and allows other groups to proceed. Logs identify tile, bbox, month, cache hit/download, and match counts.
 
 The selected OSM way ID and match score are intentionally not added to the database schema. Reproducibility comes from the immutable snapshot manifest and deterministic matching rules; per-event match auditing would require a separate schema extension.
 
@@ -189,14 +194,14 @@ Note: `maxspeed` is **not** fetched or stored despite earlier versions of this d
 
 | Property | Default |
 |---|---|
-| `pipeline.enrichment.ohsome.enabled` | `true` |
+| `pipeline.enrichment.ohsome.enabled` | `false` |
 | `pipeline.enrichment.ohsome.batch-size` | `5000` segment/month pairs |
 | `pipeline.enrichment.ohsome.delay-ms` | `60000` |
 | `ohsome.v2.base-url` | `https://api.heigit.org/ohsome-api-staging/v2` |
 | `ohsome.v2.api-key` | `${HEIGIT_API_KEY:}` |
-| `ohsome.v2.cache-path` | `./data/ohsome/v2/berlin-10km-monthly-v1` |
-| `ohsome.v2.start-month` / `end-month` | `2019-01` / `2025-01` |
-| `ohsome.v2.bbox` | `12.94,52.24,13.91,52.77` |
+| `ohsome.v2.cache-path` | `./data/ohsome/v2/tiles-v1` |
+| `ohsome.v2.grid-size-degrees` | `0.1` |
+| `ohsome.v2.buffer-degrees` | `0.01` |
 | `ohsome.v2.filter` / `clip` | `type:way and highway=*` / `false` |
 | `ohsome.v2.download-interval` | `PT60S` |
 | `ohsome.v2.max-retries` | `3` |

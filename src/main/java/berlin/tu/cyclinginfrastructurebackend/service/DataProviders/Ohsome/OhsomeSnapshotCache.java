@@ -27,7 +27,6 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,19 +43,12 @@ import static berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsom
 import static berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeSnapshotCacheException.FailureKind.RATE_LIMITED;
 import static berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeSnapshotCacheException.FailureKind.REMOTE_FAILURE;
 
-/**
- * Builds and validates the complete immutable set of monthly ohsome snapshots.
- *
- * <p>A caller gets a catalog only after every configured month has a validated,
- * checksummed snapshot. Consequently enrichment cannot claim work against a
- * partial dataset. The API key is consulted only when a file must be acquired;
- * a complete cache remains usable offline.</p>
- */
+/** Lazily downloads and validates immutable buffered tile/month snapshots. */
 @Service
 public class OhsomeSnapshotCache {
 
     private static final Logger log = LoggerFactory.getLogger(OhsomeSnapshotCache.class);
-    private static final int MANIFEST_SCHEMA_VERSION = 1;
+    private static final int MANIFEST_SCHEMA_VERSION = 2;
     private static final String MANIFEST_FILE = "manifest.json";
 
     private final OhsomeV2Properties properties;
@@ -66,7 +58,6 @@ public class OhsomeSnapshotCache {
     private final Clock clock;
     private final Delay delay;
 
-    private volatile OhsomeSnapshotCatalog readyCatalog;
     private volatile OhsomeSnapshotCacheException terminalRemoteFailure;
     private Instant lastRequestStartedAt;
 
@@ -104,92 +95,40 @@ public class OhsomeSnapshotCache {
         this.delay = Objects.requireNonNull(delay, "delay");
     }
 
-    /**
-     * Validates or acquires all configured monthly snapshots.
-     *
-     * @return an immutable catalog containing every configured month
-     */
-    public synchronized OhsomeSnapshotCatalog ensureReady() {
-        if (readyCatalog != null) {
-            return readyCatalog;
-        }
-        if (terminalRemoteFailure != null) {
-            throw terminalRemoteFailure;
-        }
-
+    /** Only the requested tile/month is acquired; other months remain untouched. */
+    public synchronized OhsomeCachedSnapshot ensureSnapshot(OhsomeTile tile, YearMonth month) {
+        Objects.requireNonNull(tile, "tile");
+        Objects.requireNonNull(month, "month");
         try {
             properties.validate();
         } catch (IllegalArgumentException exception) {
             throw new OhsomeSnapshotCacheException(CONFIGURATION, exception.getMessage(), exception);
         }
-
-        Path root = properties.getCachePath().toAbsolutePath().normalize();
-        Path snapshotsDirectory = root.resolve("snapshots");
+        Path root = properties.getCachePath().toAbsolutePath().normalize().resolve(tile.id());
         Path stagingDirectory = root.resolve("staging");
-        createDirectories(snapshotsDirectory, stagingDirectory);
-
-        DatasetDefinition expectedDataset = DatasetDefinition.from(properties);
-        List<YearMonth> months = properties.months();
-        log.info("Preparing Ohsome v2 snapshot cache: months={}, path={}", months.size(), root);
-        Manifest loadedManifest = readManifest(root.resolve(MANIFEST_FILE));
-        validateManifest(loadedManifest, expectedDataset, months);
-
-        Map<String, ManifestEntry> entries = loadedManifest == null
-                ? new LinkedHashMap<>()
-                : new LinkedHashMap<>(loadedManifest.snapshots());
-        Map<YearMonth, OhsomeCachedSnapshot> catalogEntries = new LinkedHashMap<>();
-        int reused = 0;
-        int downloaded = 0;
-        int monthNumber = 0;
-
-        for (YearMonth month : months) {
-            monthNumber++;
-            String monthKey = month.toString();
-            Path target = snapshotsDirectory.resolve(monthKey + ".parquet");
-            ManifestEntry existingEntry = entries.get(monthKey);
-
-            Optional<OhsomeCachedSnapshot> existing = validateExisting(month, target, existingEntry);
-            if (existing.isPresent()) {
-                OhsomeCachedSnapshot snapshot = existing.get();
-                catalogEntries.put(month, snapshot);
-                entries.put(monthKey, entryFor(snapshot,
-                        existingEntry == null ? "pre-existing-cache" : existingEntry.sourceUrl(),
-                        existingEntry == null ? clock.instant().toString() : existingEntry.retrievedAt()));
-                reused++;
-                if (existingEntry == null || !entryMatchesSnapshot(existingEntry, snapshot)) {
-                    writeManifest(root, expectedDataset, entries);
-                }
-                continue;
-            }
-
-            if (Files.exists(target)) {
-                moveInvalidSnapshot(target);
-            }
-            entries.remove(monthKey);
-            requireApiKey(month);
-
-            log.info("Downloading Ohsome v2 snapshot {} ({}/{}).",
-                    month, monthNumber, months.size());
-            OhsomeCachedSnapshot downloadedSnapshot = download(month, target, stagingDirectory);
-            catalogEntries.put(month, downloadedSnapshot);
-            entries.put(monthKey, entryFor(
-                    downloadedSnapshot,
-                    properties.extractionUri().toString(),
-                    clock.instant().toString()
-            ));
-            writeManifest(root, expectedDataset, entries);
-            downloaded++;
-            log.info("Cached Ohsome v2 snapshot {}: size={} bytes, features={}, api-version={}",
-                    month,
-                    downloadedSnapshot.sizeBytes(),
-                    downloadedSnapshot.metadata().featureCount(),
-                    downloadedSnapshot.metadata().apiVersion());
+        createDirectories(root, stagingDirectory);
+        DatasetDefinition expected = DatasetDefinition.from(properties, tile);
+        Manifest manifest = readManifest(root.resolve(MANIFEST_FILE));
+        validateManifest(manifest, expected);
+        Map<String, ManifestEntry> entries = new LinkedHashMap<>(manifest == null ? Map.of() : manifest.snapshots());
+        Path target = root.resolve(month + ".parquet");
+        Optional<OhsomeCachedSnapshot> existing = validateExisting(month, target, entries.get(month.toString()));
+        if (existing.isPresent()) {
+            log.info("Ohsome cache hit: tile={}, bbox={}, month={}", tile.id(), expected.bbox(), month);
+            return existing.get();
         }
-
-        readyCatalog = new OhsomeSnapshotCatalog(Collections.unmodifiableMap(catalogEntries));
-        log.info("Ohsome v2 snapshot cache ready: months={}, reused={}, downloaded={}, path={}",
-                catalogEntries.size(), reused, downloaded, root);
-        return readyCatalog;
+        if (terminalRemoteFailure != null) {
+            throw terminalRemoteFailure;
+        }
+        if (Files.exists(target)) {
+            moveInvalidSnapshot(target);
+        }
+        requireApiKey(month);
+        log.info("Downloading Ohsome snapshot: tile={}, bbox={}, month={}", tile.id(), expected.bbox(), month);
+        OhsomeCachedSnapshot downloaded = download(month, expected.bbox(), target, stagingDirectory);
+        entries.put(month.toString(), entryFor(downloaded, properties.extractionUri().toString(), clock.instant().toString()));
+        writeManifest(root, expected, entries);
+        return downloaded;
     }
 
     private Optional<OhsomeCachedSnapshot> validateExisting(
@@ -197,7 +136,7 @@ public class OhsomeSnapshotCache {
             Path target,
             ManifestEntry manifestEntry
     ) {
-        if (!Files.isRegularFile(target)) {
+        if (manifestEntry == null || !Files.isRegularFile(target)) {
             return Optional.empty();
         }
         validateEntryIdentity(month, manifestEntry);
@@ -233,7 +172,7 @@ public class OhsomeSnapshotCache {
         }
     }
 
-    private OhsomeCachedSnapshot download(YearMonth month, Path target, Path stagingDirectory) {
+    private OhsomeCachedSnapshot download(YearMonth month, List<Double> bbox, Path target, Path stagingDirectory) {
         Path partial = stagingDirectory.resolve(month + ".parquet.part");
         deleteIfExists(partial);
 
@@ -241,7 +180,7 @@ public class OhsomeSnapshotCache {
         int totalAttempts = properties.getMaxRetries() + 1;
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             waitForRequestSlot();
-            HttpRequest request = buildRequest(month);
+            HttpRequest request = buildRequest(month, bbox);
             HttpResponse<Path> response;
             try {
                 lastRequestStartedAt = clock.instant();
@@ -283,6 +222,8 @@ public class OhsomeSnapshotCache {
                     deleteIfExists(partial);
                     lastFailure = new OhsomeSnapshotCacheException(INVALID_SNAPSHOT,
                             "Downloaded ohsome snapshot " + month + " is invalid", exception);
+                    log.warn("Ohsome snapshot validation failed: bbox={}, month={}, attempt={}/{}: {}",
+                            bbox, month, attempt, totalAttempts, exception.getMessage());
                     if (attempt < totalAttempts) {
                         waitBeforeRetry(attempt, Optional.empty());
                         continue;
@@ -299,16 +240,15 @@ public class OhsomeSnapshotCache {
                         "Ohsome v2 rejected the API key with HTTP " + status + responseExcerpt);
                 throw terminalRemoteFailure;
             }
-            if (status >= 400 && status < 500 && status != 429) {
-                terminalRemoteFailure = new OhsomeSnapshotCacheException(INVALID_REQUEST,
+            if (status >= 400 && status < 500 && status != 429 && status != 408) {
+                throw new OhsomeSnapshotCacheException(INVALID_REQUEST,
                         "Ohsome v2 rejected the snapshot request with HTTP " + status + responseExcerpt);
-                throw terminalRemoteFailure;
             }
 
             boolean rateLimited = status == 429 || status == 503;
             lastFailure = new OhsomeSnapshotCacheException(rateLimited ? RATE_LIMITED : REMOTE_FAILURE,
                     "Ohsome v2 returned HTTP " + status + " for snapshot " + month + responseExcerpt);
-            if (attempt < totalAttempts && (rateLimited || status >= 500)) {
+            if (attempt < totalAttempts && (rateLimited || status == 408 || status >= 500)) {
                 waitBeforeRetry(attempt, parseRetryAfter(response));
                 continue;
             }
@@ -318,10 +258,10 @@ public class OhsomeSnapshotCache {
         throw Objects.requireNonNull(lastFailure);
     }
 
-    private HttpRequest buildRequest(YearMonth month) {
+    private HttpRequest buildRequest(YearMonth month, List<Double> bbox) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("aoi", properties.getBbox());
-        body.put("timestamp", timestamp(month).toString());
+        body.put("aoi", bbox);
+        body.put("time", timestamp(month).toString());
         body.put("filter", properties.getFilter());
         body.put("clip", properties.isClip());
 
@@ -355,6 +295,7 @@ public class OhsomeSnapshotCache {
     private void waitBeforeRetry(int failedAttempt, Optional<Duration> retryAfter) {
         Duration backoff = retryAfter.orElseGet(() -> exponentialBackoff(failedAttempt));
         if (backoff.isPositive()) {
+            log.warn("Retrying Ohsome download after {} (failed attempt {})", backoff, failedAttempt);
             sleep(backoff, "waiting to retry an ohsome snapshot download");
         }
     }
@@ -411,7 +352,7 @@ public class OhsomeSnapshotCache {
         }
     }
 
-    private void validateManifest(Manifest manifest, DatasetDefinition expected, List<YearMonth> months) {
+    private void validateManifest(Manifest manifest, DatasetDefinition expected) {
         if (manifest == null) {
             return;
         }
@@ -422,14 +363,6 @@ public class OhsomeSnapshotCache {
         if (!expected.equals(manifest.dataset())) {
             throw new OhsomeSnapshotCacheException(CONFIGURATION,
                     "The ohsome snapshot manifest describes different dataset parameters");
-        }
-        List<String> expectedMonthKeys = months.stream().map(YearMonth::toString).toList();
-        List<String> unexpectedMonths = manifest.snapshots().keySet().stream()
-                .filter(month -> !expectedMonthKeys.contains(month))
-                .toList();
-        if (!unexpectedMonths.isEmpty()) {
-            throw new OhsomeSnapshotCacheException(CONFIGURATION,
-                    "The ohsome snapshot manifest contains unexpected months: " + unexpectedMonths);
         }
         for (Map.Entry<String, ManifestEntry> snapshot : manifest.snapshots().entrySet()) {
             ManifestEntry entry = snapshot.getValue();
@@ -470,23 +403,17 @@ public class OhsomeSnapshotCache {
         if (entry == null) {
             return;
         }
-        String expectedFilename = "snapshots/" + month + ".parquet";
+        String expectedFilename = month + ".parquet";
         if (!expectedFilename.equals(entry.filename()) || !timestamp(month).toString().equals(entry.timestamp())) {
             throw new OhsomeSnapshotCacheException(CONFIGURATION,
                     "Manifest entry for " + month + " has an unexpected filename or timestamp");
         }
     }
 
-    private boolean entryMatchesSnapshot(ManifestEntry entry, OhsomeCachedSnapshot snapshot) {
-        return entry.sizeBytes() == snapshot.sizeBytes()
-                && entry.sha256().equalsIgnoreCase(snapshot.sha256())
-                && Objects.equals(entry.metadata(), snapshot.metadata());
-    }
-
     private ManifestEntry entryFor(OhsomeCachedSnapshot snapshot, String sourceUrl, String retrievedAt) {
         return new ManifestEntry(
                 snapshot.timestamp().toString(),
-                "snapshots/" + snapshot.month() + ".parquet",
+                snapshot.month() + ".parquet",
                 snapshot.sizeBytes(),
                 snapshot.sha256(),
                 retrievedAt,
@@ -604,8 +531,8 @@ public class OhsomeSnapshotCache {
     }
 
     private record DatasetDefinition(
-            String startMonth,
-            String endMonth,
+            double gridSizeDegrees,
+            double bufferDegrees,
             List<Double> bbox,
             String filter,
             boolean clip,
@@ -615,11 +542,11 @@ public class OhsomeSnapshotCache {
             bbox = List.copyOf(bbox);
         }
 
-        private static DatasetDefinition from(OhsomeV2Properties properties) {
+        private static DatasetDefinition from(OhsomeV2Properties properties, OhsomeTile tile) {
             return new DatasetDefinition(
-                    properties.startMonthValue().toString(),
-                    properties.endMonthValue().toString(),
-                    properties.getBbox(),
+                    properties.getGridSizeDegrees(),
+                    properties.getBufferDegrees(),
+                    tile.bounds(properties),
                     properties.getFilter(),
                     properties.isClip(),
                     "first-day-of-month-at-00:00:00Z"

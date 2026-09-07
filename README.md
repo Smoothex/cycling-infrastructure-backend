@@ -84,8 +84,9 @@ street segment geometry itself.
 Geofabrik serves the **latest** state of OpenStreetMap. The road network in the routing graph therefore reflects today's
 infrastructure, not the infrastructure as it existed when the rides were recorded. The Ohsome enrichment therefore uses
 historical, month-start OSM snapshots from the [ohsome API v2](https://api.heigit.org/ohsome-api-staging/v2/docs).
-Missing GeoParquet snapshots are downloaded once, checksummed, and cached under `./data/ohsome`; enrichment then runs
-locally by matching each distinct street-segment/month pair against the corresponding snapshot. See
+Snapshots are requested only for buffered 0.1° tiles containing pending events, at the start of each event’s UTC month.
+GeoParquet files are checksummed and cached under `./data/ohsome/v2/tiles-v1/{tile-id}/{month}.parquet`;
+matching then runs locally for each distinct street-segment/month pair. See
 [docs/external-enrichments.md](docs/external-enrichments.md) for the temporal approximation and matching rules.
 
 ### Key config properties
@@ -100,7 +101,9 @@ All properties live in `src/main/resources/application.properties` and can be ov
 | `pipeline.enrichment.weather.enabled` | `false` | Enable bulk Open-Meteo enrichment |
 | `pipeline.enrichment.weather.batch-size` | `5` | 0.1° grid/year locations per request |
 | `pipeline.enrichment.traffic.enabled` | `true` | Enable Berlin traffic enrichment |
-| `pipeline.enrichment.ohsome.enabled` | `true` | Enable cached monthly Ohsome v2 enrichment |
+| `pipeline.enrichment.ohsome.enabled` | `false` | Enable cached tile/month Ohsome v2 enrichment |
+| `ohsome.v2.grid-size-degrees` | `0.1` | Grid cell width and height in longitude/latitude degrees |
+| `ohsome.v2.buffer-degrees` | `0.01` | Extra area requested around each cell |
 | `pipeline.enrichment.berlin-open-data.enabled` | `true` | Enable VIZ Berlin road-closure enrichment |
 | `tiles.auto-rebuild.enabled` | `true` | Automatically rebuild stale tiles after pipeline work becomes idle |
 | `tiles.auto-rebuild.quiet-period-ms` | `900000` | Required pipeline idle time before an automatic tile build |

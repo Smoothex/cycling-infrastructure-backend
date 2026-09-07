@@ -1,6 +1,7 @@
 package berlin.tu.cyclinginfrastructurebackend.repository;
 
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeClaim;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeTile;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeBatchResult;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeWorkItem;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 
 /** Set-based persistence for local Ohsome snapshot enrichment. */
 @Repository
@@ -50,71 +52,65 @@ public class OhsomeEnrichmentBatchRepository {
                 """, Boolean.class));
     }
 
-    /** Finalizes events which cannot be represented by the configured snapshot dataset. */
+    /** Invalid source data cannot be assigned a tile/month; never discard other cities. */
     @Transactional
-    public UnsupportedCounts finalizeUnsupported(long supportedFrom,
-                                                  long supportedToExclusive,
-                                                  double minLon,
-                                                  double minLat,
-                                                  double maxLon,
-                                                  double maxLat) {
-        int outsideTime = jdbcTemplate.update("""
-                UPDATE segment_events
-                SET ohsome_processing_status = 'DONE',
-                    %s
-                WHERE ohsome_processing_status = 'PENDING'
-                  AND (event_timestamp IS NULL OR event_timestamp < ? OR event_timestamp >= ?)
-                """.formatted(CLEAR_OSM_FIELDS), supportedFrom, supportedToExclusive);
-
-        int outsideArea = jdbcTemplate.update("""
+    public int markInvalidPendingEvents() {
+        return jdbcTemplate.update("""
                 UPDATE segment_events e
-                SET ohsome_processing_status = 'DONE',
+                SET ohsome_processing_status = 'ERROR',
                     %s
-                FROM street_segments s
-                WHERE e.segment_id = s.id
-                  AND e.ohsome_processing_status = 'PENDING'
-                  AND e.event_timestamp >= ?
-                  AND e.event_timestamp < ?
-                  AND (s.geometry IS NULL OR NOT ST_Intersects(
-                        s.geometry,
-                        ST_MakeEnvelope(?, ?, ?, ?, 4326)
+                WHERE e.ohsome_processing_status = 'PENDING'
+                  AND (e.event_timestamp IS NULL OR NOT EXISTS (
+                      SELECT 1 FROM street_segments s
+                      WHERE s.id = e.segment_id
+                        AND s.geometry IS NOT NULL
+                        AND NOT ST_IsEmpty(s.geometry)
+                        AND ST_IsValid(s.geometry)
+                        AND ST_SRID(s.geometry) = 4326
+                        AND ST_XMin(Box3D(s.geometry)) BETWEEN -180 AND 180
+                        AND ST_XMax(Box3D(s.geometry)) BETWEEN -180 AND 180
+                        AND ST_YMin(Box3D(s.geometry)) BETWEEN -90 AND 90
+                        AND ST_YMax(Box3D(s.geometry)) BETWEEN -90 AND 90
                   ))
-                """.formatted(CLEAR_OSM_FIELDS),
-                supportedFrom, supportedToExclusive, minLon, minLat, maxLon, maxLat);
-        return new UnsupportedCounts(outsideTime, outsideArea);
+                """.formatted(CLEAR_OSM_FIELDS));
     }
 
-    /** Claims all pending events for up to {@code batchSize} distinct pairs in the earliest month. */
+    /** Claims one tile in the earliest pending UTC month, bounded by distinct segments. */
     @Transactional
-    public List<OhsomeWorkItem> claimNextBatch(long supportedFrom,
-                                               long supportedToExclusive,
-                                               int batchSize) {
+    public Optional<OhsomeClaim> claimNextBatch(double gridSize, int batchSize) {
         Long earliestTimestamp = jdbcTemplate.queryForObject("""
                 SELECT MIN(event_timestamp)
                 FROM segment_events
                 WHERE ohsome_processing_status = 'PENDING'
-                  AND event_timestamp >= ?
-                  AND event_timestamp < ?
-                """, Long.class, supportedFrom, supportedToExclusive);
+                """, Long.class);
         if (earliestTimestamp == null) {
-            return List.of();
+            return Optional.empty();
         }
-
         YearMonth month = YearMonth.from(Instant.ofEpochMilli(earliestTimestamp).atZone(ZoneOffset.UTC));
         OhsomeWorkItem monthBounds = new OhsomeWorkItem(0, month);
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("monthStart", monthBounds.monthStartMillis())
                 .addValue("monthEnd", monthBounds.monthEndMillis())
+                .addValue("gridSize", gridSize)
                 .addValue("batchSize", Math.max(1, batchSize));
-        List<Long> segmentIds = namedJdbcTemplate.query("""
-                WITH selected_segments AS MATERIALIZED (
-                    SELECT DISTINCT segment_id
-                    FROM segment_events
-                    WHERE ohsome_processing_status = 'PENDING'
-                      AND event_timestamp >= :monthStart
-                      AND event_timestamp < :monthEnd
-                    ORDER BY segment_id
-                    LIMIT :batchSize
+        List<ClaimedSegment> claimed = namedJdbcTemplate.query("""
+                WITH pending_segments AS MATERIALIZED (
+                    SELECT DISTINCT e.segment_id,
+                           FLOOR(ST_X(p.midpoint)::numeric / CAST(:gridSize AS numeric))::integer AS tile_x,
+                           FLOOR(ST_Y(p.midpoint)::numeric / CAST(:gridSize AS numeric))::integer AS tile_y
+                    FROM segment_events e
+                    JOIN street_segments s ON s.id = e.segment_id
+                    CROSS JOIN LATERAL (SELECT ST_LineInterpolatePoint(s.geometry, 0.5) AS midpoint) p
+                    WHERE e.ohsome_processing_status = 'PENDING'
+                      AND e.event_timestamp >= :monthStart
+                      AND e.event_timestamp < :monthEnd
+                ), selected_tile AS (
+                    SELECT tile_x, tile_y FROM pending_segments
+                    ORDER BY tile_x, tile_y LIMIT 1
+                ), selected_segments AS MATERIALIZED (
+                    SELECT p.* FROM pending_segments p
+                    JOIN selected_tile t USING (tile_x, tile_y)
+                    ORDER BY segment_id LIMIT :batchSize
                 ), claimed AS (
                     UPDATE segment_events e
                     SET ohsome_processing_status = 'PROCESSING'
@@ -123,15 +119,20 @@ public class OhsomeEnrichmentBatchRepository {
                       AND e.segment_id = s.segment_id
                       AND e.event_timestamp >= :monthStart
                       AND e.event_timestamp < :monthEnd
-                    RETURNING e.segment_id
+                    RETURNING e.segment_id, s.tile_x, s.tile_y
                 )
-                SELECT DISTINCT segment_id
-                FROM claimed
-                ORDER BY segment_id
-                """, parameters, (resultSet, rowNum) -> resultSet.getLong(1));
-
-        return segmentIds.stream().map(id -> new OhsomeWorkItem(id, month)).toList();
+                SELECT DISTINCT segment_id, tile_x, tile_y
+                FROM claimed ORDER BY segment_id
+                """, parameters, (rs, row) -> new ClaimedSegment(rs.getLong(1),
+                new OhsomeTile(rs.getInt(2), rs.getInt(3))));
+        if (claimed.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new OhsomeClaim(claimed.getFirst().tile(), month,
+                claimed.stream().map(item -> new OhsomeWorkItem(item.segmentId(), month)).toList()));
     }
+
+    private record ClaimedSegment(long segmentId, OhsomeTile tile) {}
 
     /** Applies one prepared result to every claimed event for its segment/month pair. */
     @Transactional
@@ -253,8 +254,6 @@ public class OhsomeEnrichmentBatchRepository {
                 resultSet.getLong(1), resultSet.getLong(2), resultSet.getLong(3),
                 resultSet.getLong(4), resultSet.getLong(5)));
     }
-
-    public record UnsupportedCounts(long outsideTimeRange, long outsideArea) {}
 
     public record ProcessingCounts(long pending, long processing, long enriched, long noData, long errors) {}
 }

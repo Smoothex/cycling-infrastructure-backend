@@ -38,6 +38,11 @@ public class RouteComparisonReviewController {
         return reviewService.getDetail(rideId);
     }
 
+    @GetMapping("/rides/{rideId}")
+    public RouteReviewDetailDto getRideDetail(@PathVariable UUID rideId) {
+        return reviewService.getRideDetail(rideId);
+    }
+
     @PutMapping("/review-sample/{rideId}/review")
     public RouteReviewDto saveReview(
             @PathVariable UUID rideId,
