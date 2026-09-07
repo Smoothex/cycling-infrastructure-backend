@@ -20,6 +20,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.StringReader;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -118,6 +119,52 @@ class RouteComparisonReviewServiceTest {
     }
 
     @Test
+    void directLookupReturnsAnEligibleRideOutsideTheReviewSample() {
+        UUID rideId = UUID.fromString("34f41df6-130b-4e79-b652-7efbb73e6fe4");
+        Query lookupQuery = mock(Query.class);
+        Query routeQuery = mock(Query.class);
+        Query signalQuery = mock(Query.class);
+        when(entityManager.createNativeQuery(anyString()))
+                .thenReturn(lookupQuery, routeQuery, signalQuery);
+        when(lookupQuery.setParameter(anyString(), any())).thenReturn(lookupQuery);
+        when(routeQuery.setParameter(anyString(), any())).thenReturn(routeQuery);
+        when(signalQuery.setParameter(anyString(), any())).thenReturn(signalQuery);
+        when(lookupQuery.getResultList()).thenReturn(List.<Object[]>of(eligibleRideRow(rideId)));
+        when(reviewRepository.findByRideId(rideId)).thenReturn(Optional.empty());
+        when(routeQuery.getSingleResult()).thenReturn(new Object[]{
+                1_700_000_060_000L,
+                7.5,
+                42L,
+                "{\"type\":\"LineString\",\"coordinates\":[[13.4,52.5],[13.5,52.6]]}",
+                "{\"type\":\"LineString\",\"coordinates\":[[13.4,52.5],[13.45,52.55]]}"
+        });
+        when(signalQuery.getResultList()).thenReturn(List.of());
+
+        RouteReviewDetailDto detail = service.getRideDetail(rideId);
+
+        assertThat(detail.rideId()).isEqualTo(rideId);
+        assertThat(detail.sampleOrder()).isZero();
+        assertThat(detail.classSampleRank()).isZero();
+        assertThat(detail.automatedClassification().name()).isEqualTo("LOCAL_DETOUR");
+        assertThat(detail.observedRoute().coordinates()).hasSize(2);
+    }
+
+    @Test
+    void directLookupRejectsARideWithoutAnEligibleRouteComparison() {
+        UUID rideId = UUID.randomUUID();
+        Query lookupQuery = mock(Query.class);
+        when(entityManager.createNativeQuery(anyString())).thenReturn(lookupQuery);
+        when(lookupQuery.setParameter(anyString(), any())).thenReturn(lookupQuery);
+        when(lookupQuery.getResultList()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.getRideDetail(rideId))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+                    assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(exception.getReason()).isEqualTo("Eligible route comparison not found");
+                });
+    }
+
+    @Test
     void csvExportIncludesTheClassificationPolicy() throws Exception {
         UUID rideId = UUID.fromString("cc1ad428-a775-4aef-b069-2e4a4ce1833f");
         Query sampleQuery = mock(Query.class);
@@ -191,6 +238,21 @@ class RouteComparisonReviewServiceTest {
                 0.20,
                 0.55,
                 1L
+        };
+    }
+
+    private Object[] eligibleRideRow(UUID rideId) {
+        return new Object[]{
+                rideId,
+                1_700_000_000_000L,
+                "LOCAL_DETOUR",
+                "COMMUTE",
+                "CITY_TREKKING_BIKE",
+                1_200.0,
+                1_000.0,
+                200.0,
+                0.20,
+                0.55
         };
     }
 }

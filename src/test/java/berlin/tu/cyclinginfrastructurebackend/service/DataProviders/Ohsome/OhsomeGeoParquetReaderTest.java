@@ -1,6 +1,8 @@
 package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -18,9 +20,11 @@ class OhsomeGeoParquetReaderTest {
     @TempDir
     Path temporaryDirectory;
 
-    @Test
-    void readsZstdMapAndWkbAndIgnoresPolygonRows() throws Exception {
-        Path snapshot = decodeFixture();
+    @ParameterizedTest
+    @ValueSource(strings = {"ohsome-v2-zstd-geoparquet.parquet.b64", "ohsome-v2-current-schema.parquet.b64"})
+    void readsCurrentAndLegacySchemaWithZstdMapAndWkbAndIgnoresPolygonRows(String fixture) throws Exception {
+        // Current API: tags / "ohsome API"; legacy snapshots: osm_tags / api.
+        Path snapshot = decodeFixture(fixture);
         OhsomeGeoParquetReader reader = new OhsomeGeoParquetReader();
 
         OhsomeSnapshotMetadata metadata = reader.validate(snapshot);
@@ -49,10 +53,10 @@ class OhsomeGeoParquetReaderTest {
                 .isInstanceOf(IOException.class);
     }
 
-    private Path decodeFixture() throws Exception {
+    private Path decodeFixture(String fixture) throws Exception {
         Path snapshot = temporaryDirectory.resolve("snapshot.parquet");
         try (InputStream encoded = getClass().getResourceAsStream(
-                "/ohsome/ohsome-v2-zstd-geoparquet.parquet.b64")) {
+                "/ohsome/" + fixture)) {
             assertThat(encoded).isNotNull();
             Files.write(snapshot, Base64.getMimeDecoder().decode(encoded.readAllBytes()));
         }

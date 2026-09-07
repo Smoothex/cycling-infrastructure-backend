@@ -5,6 +5,8 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.CyclewayType;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeBatchResult;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeInfrastructureAttributes;
 import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeWorkItem;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeClaim;
+import berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsome.OhsomeTile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,8 +42,6 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
             .parse("postgis/postgis:17-3.4")
             .asCompatibleSubstituteFor("postgres");
     private static final YearMonth JANUARY = YearMonth.of(2024, 1);
-    private static final long SUPPORTED_FROM = monthStart(JANUARY);
-    private static final long SUPPORTED_TO_EXCLUSIVE = monthStart(YearMonth.of(2024, 3));
 
     @Container
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(POSTGIS_IMAGE)
@@ -96,32 +96,60 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
     }
 
     @Test
-    void finalizesUnsupportedTimeAndAreaWhileLeavingSupportedWorkUntouched() {
+    void invalidDataBecomesErrorButOtherCitiesAndYearsRemainPending() {
         insertSegment(10, "LINESTRING(13.2 52.4, 13.3 52.5)");
-        insertSegment(20, "LINESTRING(10.0 50.0, 10.1 50.1)");
+        insertSegment(20, "LINESTRING(9.99 53.55, 9.991 53.55)");
         insertSegment(30, null);
-        long supportedTimestamp = timestamp(JANUARY, 15);
-
+        insertSegment(40, "LINESTRING EMPTY");
+        insertSegment(50, "LINESTRING(190 52, 191 52)");
         insertEvent(1, 10, null);
-        insertEvent(2, 10, SUPPORTED_FROM - 1);
-        insertEvent(3, 10, SUPPORTED_TO_EXCLUSIVE);
-        insertEvent(4, 20, supportedTimestamp);
-        insertEvent(5, 30, supportedTimestamp);
-        insertEvent(6, 10, supportedTimestamp);
-        for (long id = 1; id <= 6; id++) {
-            putStaleOsmValues(id);
-        }
+        insertEvent(2, 10, timestamp(YearMonth.of(2018, 1), 1));
+        insertEvent(3, 20, timestamp(YearMonth.of(2026, 3), 1));
+        insertEvent(4, 30, timestamp(JANUARY, 1));
+        insertEvent(5, 40, timestamp(JANUARY, 1));
+        insertEvent(6, 50, timestamp(JANUARY, 1));
+        for (long id = 1; id <= 6; id++) putStaleOsmValues(id);
 
-        OhsomeEnrichmentBatchRepository.UnsupportedCounts counts = inTransaction(() ->
-                repository.finalizeUnsupported(
-                        SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, 13.0, 52.0, 14.0, 53.0));
+        assertThat(inTransaction(repository::markInvalidPendingEvents)).isEqualTo(4);
+        for (long id : new long[]{1, 4, 5, 6}) assertThat(readEvent(id)).isEqualTo(emptyState("ERROR"));
+        assertThat(readEvent(2)).isEqualTo(staleState("PENDING"));
+        assertThat(readEvent(3)).isEqualTo(staleState("PENDING"));
+    }
 
-        assertThat(counts).isEqualTo(new OhsomeEnrichmentBatchRepository.UnsupportedCounts(3, 2));
-        for (long id = 1; id <= 5; id++) {
-            assertThat(readEvent(id)).isEqualTo(emptyState("DONE"));
+    @Test
+    void separatesBerlinHamburgAndMunichInOneDatabase() {
+        insertSegment(10, "LINESTRING(13.40 52.52, 13.401 52.52)");
+        insertSegment(20, "LINESTRING(9.99 53.55, 9.991 53.55)");
+        insertSegment(30, "LINESTRING(11.57 48.13, 11.571 48.13)");
+        for (int i = 1; i <= 3; i++) insertEvent(i, i * 10, timestamp(JANUARY, 1));
+        assertThat(inTransaction(repository::markInvalidPendingEvents)).isZero();
+        // Deterministic tile ordering, regardless of segment IDs.
+        for (long id : new long[]{20, 30, 10}) {
+            OhsomeClaim claim = inTransaction(() -> repository.claimNextBatch(0.1, 100)).orElseThrow();
+            assertThat(claim.items()).containsExactly(new OhsomeWorkItem(id, JANUARY));
+            assertThat(claim.tile()).isEqualTo(switch ((int) id) {
+                case 20 -> new OhsomeTile(99, 535);
+                case 30 -> new OhsomeTile(115, 481);
+                default -> new OhsomeTile(134, 525);
+            });
+            inTransaction(() -> repository.finalizeBatch(claim.items().stream().map(OhsomeBatchResult::noData).toList()));
         }
-        assertThat(readEvent(6)).isEqualTo(staleState("PENDING"));
-        assertThat(repository.hasPendingWork()).isTrue();
+        assertThat(repository.hasPendingWork()).isFalse();
+    }
+
+    @Test
+    void usesExactGridBoundariesAndUtcMonthBoundariesWithoutStudyPeriodLimits() {
+        insertSegment(10, "LINESTRING(13.4 52.521, 13.4 52.522)");
+        insertSegment(20, "LINESTRING(13.39999999 52.521, 13.39999999 52.522)");
+        long boundary = timestamp(YearMonth.of(2026, 2), 1);
+        insertEvent(1, 10, boundary);
+        insertEvent(2, 20, boundary - 1);
+        OhsomeClaim before = inTransaction(() -> repository.claimNextBatch(0.1, 100)).orElseThrow();
+        assertThat(before.month()).isEqualTo(YearMonth.of(2026, 1));
+        assertThat(before.tile()).isEqualTo(new OhsomeTile(133, 525));
+        OhsomeClaim after = inTransaction(() -> repository.claimNextBatch(0.1, 100)).orElseThrow();
+        assertThat(after.month()).isEqualTo(YearMonth.of(2026, 2));
+        assertThat(after.tile()).isEqualTo(new OhsomeTile(134, 525));
     }
 
     @Test
@@ -134,7 +162,7 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
         insertEvent(5, 30, timestamp(JANUARY, 12));
 
         List<OhsomeWorkItem> claimed = inTransaction(() ->
-                repository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, 2));
+                repository.claimNextBatch(0.1, 2).map(OhsomeClaim::items).orElseGet(List::of));
 
         assertThat(claimed).containsExactly(
                 new OhsomeWorkItem(10, JANUARY),
@@ -157,7 +185,7 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
             putStaleOsmValues(id);
         }
         List<OhsomeWorkItem> claimed = inTransaction(() ->
-                repository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, 2));
+                repository.claimNextBatch(0.1, 2).map(OhsomeClaim::items).orElseGet(List::of));
         OhsomeWorkItem matchedItem = claimed.stream()
                 .filter(item -> item.segmentId() == 10)
                 .findFirst()
@@ -189,7 +217,7 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
         insertEvent(2, 10, timestamp(JANUARY, 20));
         insertEvent(3, 20, timestamp(JANUARY, 10));
         List<OhsomeWorkItem> claimed = inTransaction(() ->
-                repository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, 1));
+                repository.claimNextBatch(0.1, 1).map(OhsomeClaim::items).orElseGet(List::of));
 
         int released = inTransaction(() -> repository.releaseBatch(claimed));
 
@@ -247,7 +275,7 @@ class OhsomeEnrichmentBatchRepositoryIntegrationTest {
                 throw new IllegalStateException("Interrupted while starting concurrent claim", exception);
             }
             return inTransaction(() ->
-                    repository.claimNextBatch(SUPPORTED_FROM, SUPPORTED_TO_EXCLUSIVE, 1));
+                    repository.claimNextBatch(0.1, 1).map(OhsomeClaim::items).orElseGet(List::of));
         });
     }
 

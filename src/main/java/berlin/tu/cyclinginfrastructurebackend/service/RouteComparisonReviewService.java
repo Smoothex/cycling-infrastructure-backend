@@ -46,6 +46,16 @@ public class RouteComparisonReviewService {
             "issue_codes", "review_notes", "reviewed_at"
     };
 
+    private static final String ELIGIBLE_ROUTE_COMPARISON_PREDICATE = """
+            r.status = 'PROCESSED'
+              AND r.route_comparison_type IS NOT NULL
+              AND r.actual_distance IS NOT NULL
+              AND r.shortest_path_distance IS NOT NULL
+              AND r.overlap_ratio IS NOT NULL
+              AND r.trajectory IS NOT NULL
+              AND r.shortest_path IS NOT NULL
+            """;
+
     private static final String SAMPLE_CTE = """
             WITH ranked_comparisons AS (
                 SELECT r.id,
@@ -67,13 +77,8 @@ public class RouteComparisonReviewService {
                            ORDER BY MD5(CAST(r.id AS text))
                        ) AS class_sample_rank
                 FROM rides r
-                WHERE r.status = 'PROCESSED'
-                  AND r.route_comparison_type IS NOT NULL
-                  AND r.actual_distance IS NOT NULL
-                  AND r.shortest_path_distance IS NOT NULL
-                  AND r.overlap_ratio IS NOT NULL
-                  AND r.trajectory IS NOT NULL
-                  AND r.shortest_path IS NOT NULL
+                WHERE
+            """ + ELIGIBLE_ROUTE_COMPARISON_PREDICATE + """
             ), review_sample AS (
                 SELECT *
                 FROM ranked_comparisons
@@ -178,6 +183,55 @@ public class RouteComparisonReviewService {
     public RouteReviewDetailDto getDetail(UUID rideId) {
         RouteReviewSampleItemDto sampleItem = requireSampleItem(rideId);
         return buildDetail(sampleItem, true);
+    }
+
+    @Transactional(readOnly = true)
+    public RouteReviewDetailDto getRideDetail(UUID rideId) {
+        Query query = entityManager.createNativeQuery("""
+                SELECT r.id,
+                       r.start_time,
+                       r.route_comparison_type,
+                       r.ride_intent,
+                       r.bike_type,
+                       r.actual_distance,
+                       r.shortest_path_distance,
+                       r.actual_distance - r.shortest_path_distance AS absolute_excess_distance,
+                       (r.actual_distance - r.shortest_path_distance)
+                           / NULLIF(r.shortest_path_distance, 0) AS relative_detour_ratio,
+                       r.overlap_ratio
+                FROM rides r
+                WHERE r.id = :rideId
+                  AND
+                """ + ELIGIBLE_ROUTE_COMPARISON_PREDICATE)
+                .setParameter("rideId", rideId);
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = query.getResultList();
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND, "Eligible route comparison not found");
+        }
+
+        Object[] row = rows.getFirst();
+        RouteReviewDto review = reviewRepository.findByRideId(rideId)
+                .map(RouteReviewDto::from)
+                .orElse(null);
+        RouteReviewSampleItemDto ride = new RouteReviewSampleItemDto(
+                uuid(row[0]),
+                0,
+                0,
+                RouteComparisonType.valueOf(string(row[2])),
+                longValue(row[1]),
+                string(row[3]),
+                string(row[4]),
+                decimal(row[5]),
+                decimal(row[6]),
+                decimal(row[7]),
+                decimal(row[8]),
+                decimal(row[9]),
+                review
+        );
+        return buildDetail(ride, true);
     }
 
     private RouteReviewDetailDto buildDetail(

@@ -29,6 +29,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OhsomeSnapshotCacheTest {
 
     private static final byte[] VALID_SNAPSHOT = "PAR1-test-snapshot-PAR1".getBytes(StandardCharsets.UTF_8);
+    private static final OhsomeTile BERLIN = new OhsomeTile(134, 525);
+    private static final OhsomeTile HAMBURG = new OhsomeTile(99, 535);
+    private static final OhsomeTile MUNICH = new OhsomeTile(115, 481);
+    private static final YearMonth JANUARY = YearMonth.of(2019, 1);
+    private static final YearMonth FEBRUARY = YearMonth.of(2019, 2);
     private static final Instant TEST_NOW = Instant.parse("2026-08-10T12:00:00Z");
 
     @TempDir
@@ -44,70 +49,66 @@ class OhsomeSnapshotCacheTest {
     }
 
     @Test
-    void defaultDatasetContainsAllSeventyThreeMonthlySnapshots() {
-        OhsomeV2Properties properties = new OhsomeV2Properties();
-
-        assertThat(properties.months())
-                .hasSize(73)
-                .first().isEqualTo(YearMonth.of(2019, 1));
-        assertThat(properties.months()).last().isEqualTo(YearMonth.of(2025, 1));
-        assertThat(properties.extractionUri().toString())
-                .isEqualTo("https://api.heigit.org/ohsome-api-staging/v2/extraction/features.parquet");
-        assertThat(properties.supports(YearMonth.of(2019, 1))).isTrue();
-        assertThat(properties.supports(YearMonth.of(2025, 2))).isFalse();
-        assertThat(properties.containsCoordinate(13.4, 52.5)).isTrue();
-        assertThat(properties.containsCoordinate(14.0, 52.5)).isFalse();
-    }
-
-    @Test
-    void downloadsMissingMonthsThenReusesCompleteCacheWithoutApiKey() throws Exception {
-        AtomicInteger requests = new AtomicInteger();
-        List<String> requestBodies = new ArrayList<>();
+    void downloadsOnlyRequestedTileMonthsAndReusesThemOffline() throws Exception {
+        List<String> bodies = new ArrayList<>();
         startServer(exchange -> {
-            requests.incrementAndGet();
-            requestBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             assertThat(exchange.getRequestHeaders().getFirst("authorization")).isEqualTo("test-key");
-            assertThat(exchange.getRequestHeaders().getFirst("Content-Type"))
-                    .isEqualTo("application/json");
             respond(exchange, 200, VALID_SNAPSHOT);
         });
-
-        OhsomeV2Properties properties = propertiesForTwoMonths();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("test-key");
-        OhsomeSnapshotCache initialCache = cache(properties, duration -> { });
+        OhsomeSnapshotCache snapshotCache = cache(properties, duration -> { });
+        assertThat(bodies).isEmpty();
+        var first = snapshotCache.ensureSnapshot(BERLIN, JANUARY);
+        assertThat(snapshotCache.ensureSnapshot(BERLIN, JANUARY)).isEqualTo(first);
+        snapshotCache.ensureSnapshot(BERLIN, FEBRUARY);
+        snapshotCache.ensureSnapshot(HAMBURG, JANUARY);
+        snapshotCache.ensureSnapshot(MUNICH, JANUARY);
 
-        OhsomeSnapshotCatalog initialCatalog = initialCache.ensureReady();
-
-        assertThat(requests).hasValue(2);
-        assertThat(requestBodies)
-                .anySatisfy(body -> assertThat(body).contains("2019-01-01T00:00:00Z"))
-                .anySatisfy(body -> assertThat(body).contains("2019-02-01T00:00:00Z"));
-        for (String requestBody : requestBodies) {
-            var request = new ObjectMapper().readTree(requestBody);
-            assertThat(request.path("aoi").toString()).isEqualTo("[12.94,52.24,13.91,52.77]");
-            assertThat(request.path("filter").asText()).isEqualTo("type:way and highway=*");
-            assertThat(request.path("clip").asBoolean()).isFalse();
+        assertThat(bodies).hasSize(4);
+        List<List<Double>> expected = List.of(BERLIN.bounds(properties), BERLIN.bounds(properties),
+                HAMBURG.bounds(properties), MUNICH.bounds(properties));
+        for (int i = 0; i < bodies.size(); i++) {
+            var body = new ObjectMapper().readTree(bodies.get(i));
+            assertThat(body.path("aoi")).isEqualTo(new ObjectMapper().valueToTree(expected.get(i)));
+            assertThat(body.path("clip").asBoolean()).isFalse();
+            assertThat(body.path("filter").asText()).isEqualTo("type:way and highway=*");
+            assertThat(body.has("timestamp")).isFalse();
+            assertThat(body.path("time").asText())
+                    .isEqualTo(i == 1 ? "2019-02-01T00:00:00Z" : "2019-01-01T00:00:00Z");
         }
-        assertThat(initialCatalog.snapshots()).containsOnlyKeys(
-                YearMonth.of(2019, 1),
-                YearMonth.of(2019, 2)
-        );
-        assertThat(Files.readString(properties.getCachePath().resolve("manifest.json")))
-                .contains("type:way and highway=*")
-                .contains("first-day-of-month-at-00:00:00Z")
-                .doesNotContain("test-key");
-
+        assertThat(Files.readString(properties.getCachePath().resolve("134_525/manifest.json")))
+                .contains("first-day-of-month-at-00:00:00Z").doesNotContain("test-key");
+        assertThat(properties.getCachePath().resolve("134_525/2019-03.parquet")).doesNotExist();
         server.stop(0);
         server = null;
         properties.setApiKey("");
-        OhsomeSnapshotCache offlineCache = cache(properties, duration -> {
-            throw new AssertionError("An offline cache must not wait for an HTTP request");
+        var offline = cache(properties, duration -> { throw new AssertionError("No network needed"); });
+        assertThat(offline.ensureSnapshot(BERLIN, JANUARY)).isEqualTo(first);
+        offline.ensureSnapshot(HAMBURG, JANUARY);
+        offline.ensureSnapshot(MUNICH, JANUARY);
+    }
+
+    @Test
+    void extractionRequestUsesTimeAndRejectsLegacyTimestampField() throws Exception {
+        // Reproduce the live v2 API's 422 response to the former request shape.
+        startServer(exchange -> {
+            var body = new ObjectMapper().readTree(exchange.getRequestBody());
+            if (!body.path("time").isTextual() || body.has("timestamp")) {
+                respond(exchange, 422, "time is required; timestamp is forbidden".getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+            respond(exchange, 200, VALID_SNAPSHOT);
         });
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
 
-        OhsomeSnapshotCatalog offlineCatalog = offlineCache.ensureReady();
+        var snapshot = cache(properties, duration -> { }).ensureSnapshot(
+                new OhsomeTile(120, 490), YearMonth.of(2020, 7));
 
-        assertThat(offlineCatalog.snapshots()).hasSize(2);
-        assertThat(requests).hasValue(2);
+        assertThat(snapshot.timestamp()).isEqualTo(Instant.parse("2020-07-01T00:00:00Z"));
+        assertThat(snapshot.path()).isRegularFile();
     }
 
     @Test
@@ -122,13 +123,13 @@ class OhsomeSnapshotCacheTest {
             }
         });
 
-        OhsomeV2Properties properties = propertiesForOneMonth();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("test-key");
         List<Duration> waits = new ArrayList<>();
 
-        OhsomeSnapshotCatalog catalog = cache(properties, waits::add).ensureReady();
+        OhsomeCachedSnapshot snapshot = cache(properties, waits::add).ensureSnapshot(BERLIN, JANUARY);
 
-        assertThat(catalog.snapshots()).hasSize(1);
+        assertThat(snapshot.month()).isEqualTo(JANUARY);
         assertThat(requests).hasValue(2);
         assertThat(waits).containsExactly(Duration.ofSeconds(7));
     }
@@ -136,14 +137,14 @@ class OhsomeSnapshotCacheTest {
     @Test
     void refusesToMixCacheWithDifferentDatasetParameters() throws Exception {
         startServer(exchange -> respond(exchange, 200, VALID_SNAPSHOT));
-        OhsomeV2Properties properties = propertiesForOneMonth();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("test-key");
-        cache(properties, duration -> { }).ensureReady();
+        cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
 
         properties.setFilter("type:way and highway=cycleway");
         properties.setApiKey("");
 
-        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureReady())
+        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
                 .isInstanceOf(OhsomeSnapshotCacheException.class)
                 .extracting(exception -> ((OhsomeSnapshotCacheException) exception).failureKind())
                 .isEqualTo(OhsomeSnapshotCacheException.FailureKind.CONFIGURATION);
@@ -156,17 +157,17 @@ class OhsomeSnapshotCacheTest {
             requests.incrementAndGet();
             respond(exchange, 200, VALID_SNAPSHOT);
         });
-        OhsomeV2Properties properties = propertiesForOneMonth();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("");
 
-        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureReady())
+        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
                 .isInstanceOf(OhsomeSnapshotCacheException.class)
                 .extracting(exception -> ((OhsomeSnapshotCacheException) exception).failureKind())
                 .isEqualTo(OhsomeSnapshotCacheException.FailureKind.CONFIGURATION);
 
         assertThat(requests).hasValue(0);
-        assertThat(properties.getCachePath().resolve("snapshots/2019-01.parquet")).doesNotExist();
-        assertThat(properties.getCachePath().resolve("staging/2019-01.parquet.part")).doesNotExist();
+        assertThat(properties.getCachePath().resolve("134_525/2019-01.parquet")).doesNotExist();
+        assertThat(properties.getCachePath().resolve("134_525/staging/2019-01.parquet.part")).doesNotExist();
     }
 
     @Test
@@ -176,11 +177,11 @@ class OhsomeSnapshotCacheTest {
             requests.incrementAndGet();
             respond(exchange, 401, "unauthorized".getBytes(StandardCharsets.UTF_8));
         });
-        OhsomeV2Properties properties = propertiesForOneMonth();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("secret-test-key");
         OhsomeSnapshotCache snapshotCache = cache(properties, duration -> { });
 
-        assertThatThrownBy(snapshotCache::ensureReady)
+        assertThatThrownBy(() -> snapshotCache.ensureSnapshot(BERLIN, JANUARY))
                 .isInstanceOf(OhsomeSnapshotCacheException.class)
                 .satisfies(exception -> {
                     OhsomeSnapshotCacheException cacheException =
@@ -189,13 +190,13 @@ class OhsomeSnapshotCacheTest {
                             .isEqualTo(OhsomeSnapshotCacheException.FailureKind.ACCESS_DENIED);
                     assertThat(cacheException.getMessage()).doesNotContain("secret-test-key");
                 });
-        assertThatThrownBy(snapshotCache::ensureReady)
+        assertThatThrownBy(() -> snapshotCache.ensureSnapshot(BERLIN, JANUARY))
                 .isInstanceOf(OhsomeSnapshotCacheException.class)
                 .extracting(exception -> ((OhsomeSnapshotCacheException) exception).failureKind())
                 .isEqualTo(OhsomeSnapshotCacheException.FailureKind.ACCESS_DENIED);
 
         assertThat(requests).hasValue(1);
-        assertThat(properties.getCachePath().resolve("staging/2019-01.parquet.part")).doesNotExist();
+        assertThat(properties.getCachePath().resolve("134_525/staging/2019-01.parquet.part")).doesNotExist();
     }
 
     @Test
@@ -206,22 +207,63 @@ class OhsomeSnapshotCacheTest {
             respond(exchange, request == 2 ? 500 : 200,
                     request == 2 ? "temporary failure".getBytes(StandardCharsets.UTF_8) : VALID_SNAPSHOT);
         });
-        OhsomeV2Properties properties = propertiesForTwoMonths();
+        OhsomeV2Properties properties = baseProperties();
         properties.setApiKey("test-key");
         properties.setMaxRetries(0);
-
-        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureReady())
-                .isInstanceOf(OhsomeSnapshotCacheException.class)
-                .extracting(exception -> ((OhsomeSnapshotCacheException) exception).failureKind())
-                .isEqualTo(OhsomeSnapshotCacheException.FailureKind.REMOTE_FAILURE);
-        assertThat(properties.getCachePath().resolve("snapshots/2019-01.parquet")).isRegularFile();
-        assertThat(properties.getCachePath().resolve("snapshots/2019-02.parquet")).doesNotExist();
-
-        OhsomeSnapshotCatalog catalog = cache(properties, duration -> { }).ensureReady();
-
-        assertThat(catalog.snapshots()).hasSize(2);
+        var initial = cache(properties, duration -> { });
+        initial.ensureSnapshot(BERLIN, JANUARY);
+        assertThatThrownBy(() -> initial.ensureSnapshot(BERLIN, FEBRUARY))
+                .isInstanceOf(OhsomeSnapshotCacheException.class);
+        var restarted = cache(properties, duration -> { });
+        restarted.ensureSnapshot(BERLIN, JANUARY);
+        restarted.ensureSnapshot(BERLIN, FEBRUARY);
         assertThat(requests).hasValue(3);
-        assertThat(properties.getCachePath().resolve("staging/2019-02.parquet.part")).doesNotExist();
+        assertThat(properties.getCachePath().resolve("134_525/staging/2019-02.parquet.part")).doesNotExist();
+    }
+
+    @Test
+    void permanentRejectionDoesNotPoisonOtherTileMonths() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> {
+            int request = requests.incrementAndGet();
+            respond(exchange, request == 1 ? 400 : 200,
+                    request == 1 ? "invalid timestamp".getBytes(StandardCharsets.UTF_8) : VALID_SNAPSHOT);
+        });
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        var snapshotCache = cache(properties, duration -> { });
+        assertThatThrownBy(() -> snapshotCache.ensureSnapshot(BERLIN, YearMonth.of(1900, 1)))
+                .isInstanceOf(OhsomeSnapshotCacheException.class);
+        assertThat(snapshotCache.ensureSnapshot(HAMBURG, JANUARY).path()).isRegularFile();
+        assertThat(requests).hasValue(2);
+    }
+
+    @Test
+    void changedBufferOrGridCannotReuseTheSameTileCache() throws Exception {
+        startServer(exchange -> respond(exchange, 200, VALID_SNAPSHOT));
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
+        properties.setBufferDegrees(0.02);
+        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
+                .isInstanceOf(OhsomeSnapshotCacheException.class);
+        properties.setBufferDegrees(0.01);
+        properties.setGridSizeDegrees(0.05);
+        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
+                .isInstanceOf(OhsomeSnapshotCacheException.class);
+    }
+
+    @Test
+    void corruptedSnapshotIsPreservedAndDownloadedAgain() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> { requests.incrementAndGet(); respond(exchange, 200, VALID_SNAPSHOT); });
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        var first = cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
+        Files.writeString(first.path(), "corrupt");
+        cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
+        assertThat(requests).hasValue(2);
+        assertThat(first.path().resolveSibling("2019-01.parquet.invalid")).isRegularFile();
     }
 
     private OhsomeSnapshotCache cache(OhsomeV2Properties properties, OhsomeSnapshotCache.Delay delay) {
@@ -241,23 +283,10 @@ class OhsomeSnapshotCacheTest {
         );
     }
 
-    private OhsomeV2Properties propertiesForTwoMonths() {
-        OhsomeV2Properties properties = baseProperties();
-        properties.setEndMonth("2019-02");
-        return properties;
-    }
-
-    private OhsomeV2Properties propertiesForOneMonth() {
-        OhsomeV2Properties properties = baseProperties();
-        properties.setEndMonth("2019-01");
-        return properties;
-    }
-
     private OhsomeV2Properties baseProperties() {
         OhsomeV2Properties properties = new OhsomeV2Properties();
         properties.setBaseUrl(URI.create("http://localhost:" + server.getAddress().getPort() + "/v2"));
         properties.setCachePath(temporaryDirectory.resolve("cache"));
-        properties.setStartMonth("2019-01");
         properties.setDownloadInterval(Duration.ZERO);
         properties.setInitialRetryDelay(Duration.ZERO);
         return properties;

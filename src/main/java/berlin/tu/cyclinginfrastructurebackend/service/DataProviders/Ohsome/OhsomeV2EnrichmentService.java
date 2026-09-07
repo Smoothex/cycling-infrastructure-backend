@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -70,64 +69,60 @@ public class OhsomeV2EnrichmentService {
         Instant startedAt = Instant.now();
         MutableSummary summary = new MutableSummary();
         try (PipelineActivityTracker.Activity ignored = pipelineActivityTracker.beginWork()) {
-            DatasetBounds bounds = datasetBounds();
-            OhsomeEnrichmentBatchRepository.UnsupportedCounts unsupported =
-                    batchRepository.finalizeUnsupported(
-                            bounds.fromInclusive(),
-                            bounds.toExclusive(),
-                            bounds.minLon(),
-                            bounds.minLat(),
-                            bounds.maxLon(),
-                            bounds.maxLat()
-                    );
-            summary.outsideTimeRange = unsupported.outsideTimeRange();
-            summary.outsideArea = unsupported.outsideArea();
-
-            if (!batchRepository.hasPendingWork()) {
-                return finish(summary, startedAt, true);
-            }
-
-            final OhsomeSnapshotCatalog catalog;
-            try {
-                catalog = snapshotCache.ensureReady();
-                summary.validatedSnapshots = catalog.snapshots().size();
-            } catch (OhsomeSnapshotCacheException exception) {
-                summary.cacheFailure = exception.failureKind().name();
-                log.error("Ohsome v2 cache is not ready ({}): {}. Supported events remain PENDING.",
-                        exception.failureKind(), exception.getMessage());
-                return finish(summary, startedAt, false);
-            }
-
+            summary.invalidEvents = batchRepository.markInvalidPendingEvents();
+            OhsomeTile loadedTile = null;
             YearMonth loadedMonth = null;
             OhsomeSnapshot loadedSnapshot = null;
             while (!Thread.currentThread().isInterrupted()) {
-                List<OhsomeWorkItem> workItems = batchRepository.claimNextBatch(
-                        bounds.fromInclusive(), bounds.toExclusive(), Math.max(1, batchSize));
-                if (workItems.isEmpty()) {
+                var optionalClaim = batchRepository.claimNextBatch(properties.getGridSizeDegrees(), Math.max(1, batchSize));
+                if (optionalClaim.isEmpty()) {
                     break;
                 }
-
-                YearMonth month = workItems.getFirst().month();
+                OhsomeClaim claim = optionalClaim.get();
+                List<OhsomeWorkItem> workItems = claim.items();
                 try {
-                    if (!month.equals(loadedMonth)) {
-                        loadedSnapshot = snapshotReader.read(catalog.snapshot(month).path());
-                        loadedMonth = month;
+                    if (!claim.tile().equals(loadedTile) || !claim.month().equals(loadedMonth)) {
+                        loadedSnapshot = null; // Release the previous spatial index before reading another file.
+                        OhsomeCachedSnapshot cached = snapshotCache.ensureSnapshot(claim.tile(), claim.month());
+                        summary.validatedSnapshots++;
+                        loadedSnapshot = snapshotReader.read(cached.path());
+                        loadedTile = claim.tile();
+                        loadedMonth = claim.month();
                         summary.loadedSnapshots++;
-                        log.info("Loaded Ohsome snapshot {} with {} line features.",
-                                month, loadedSnapshot.featureCount());
                     }
-
                     PreparedBatch prepared = prepareResults(workItems, loadedSnapshot);
                     summary.updatedEvents += batchRepository.finalizeBatch(prepared.results());
                     summary.addCommitted(prepared);
                     summary.batches++;
+                    log.info("Ohsome batch: tile={}, month={}, pairs={}, matched={}, unmatched={}, ambiguous={}, errors={}",
+                            claim.tile().id(), claim.month(), workItems.size(), prepared.matchedPairs(),
+                            prepared.unmatchedPairs(), prepared.ambiguousPairs(), prepared.errorPairs());
                 } catch (IOException | RuntimeException exception) {
-                    int released = batchRepository.releaseBatch(workItems);
-                    summary.releasedEvents += released;
-                    summary.processingFailure = exception.getClass().getSimpleName();
-                    log.error("Ohsome enrichment stopped while processing {}: {}. "
-                                    + "Released {} events to PENDING.",
-                            month, exception.getMessage(), released, exception);
+                    if (exception instanceof OhsomeSnapshotCacheException cacheException
+                            && cacheException.failureKind() == OhsomeSnapshotCacheException.FailureKind.INVALID_REQUEST) {
+                        try {
+                            summary.updatedEvents += batchRepository.finalizeBatch(
+                                    workItems.stream().map(OhsomeBatchResult::error).toList());
+                        } catch (RuntimeException finalizationFailure) {
+                            summary.releasedEvents += batchRepository.releaseBatch(workItems);
+                            throw finalizationFailure;
+                        }
+                        summary.batches++;
+                        summary.processedPairs += workItems.size();
+                        summary.errorPairs += workItems.size();
+                        loadedTile = null;
+                        log.error("Ohsome rejected tile={}, month={}; marked {} pairs ERROR: {}",
+                                claim.tile().id(), claim.month(), workItems.size(), exception.getMessage());
+                        continue;
+                    }
+                    summary.releasedEvents += batchRepository.releaseBatch(workItems);
+                    if (exception instanceof OhsomeSnapshotCacheException cacheException) {
+                        summary.cacheFailure = cacheException.failureKind().name();
+                    } else {
+                        summary.processingFailure = exception.getClass().getSimpleName();
+                    }
+                    log.error("Ohsome stopped at tile={}, month={}; claimed events released to PENDING: {}",
+                            claim.tile().id(), claim.month(), exception.getMessage(), exception);
                     break;
                 }
             }
@@ -135,7 +130,7 @@ public class OhsomeV2EnrichmentService {
             if (Thread.currentThread().isInterrupted()) {
                 summary.interrupted = true;
             }
-            return finish(summary, startedAt, summary.processingFailure == null && !summary.interrupted);
+            return finish(summary, startedAt, summary.cacheFailure == null && summary.processingFailure == null && !summary.interrupted);
         } finally {
             // Some batches may already have committed even if a later claim, load, or
             // final-status query fails. Invalidate tiles exactly once for those writes.
@@ -210,7 +205,7 @@ public class OhsomeV2EnrichmentService {
                 ───────────────────────────────────────────────────────────────────
                 Snapshot cache:       validated={}  loaded={}
                 Segment/month pairs:  processed={}  matched={}  unmatched={}  ambiguous={}  errors={}
-                Events updated:       matched/no-data/error={}  outside-time={}  outside-area={}
+                Events updated:       matched/no-data/error={}  invalid={}
                 Final statuses:       pending={}  processing={}  enriched={}  no-data={}  errors={}
                 Completion:           completed={}  cache-failure={}  processing-failure={}  elapsed={}
                 ═══════════════════════════════════════════════════════════════════
@@ -218,7 +213,7 @@ public class OhsomeV2EnrichmentService {
                 summary.validatedSnapshots(), summary.loadedSnapshots(),
                 summary.processedPairs(), summary.matchedPairs(), summary.unmatchedPairs(),
                 summary.ambiguousPairs(), summary.errorPairs(), summary.updatedEvents(),
-                summary.outsideTimeRange(), summary.outsideArea(), summary.pendingEvents(),
+                summary.invalidEvents(), summary.pendingEvents(),
                 summary.processingEvents(), summary.enrichedEvents(), summary.noDataEvents(),
                 summary.errorEvents(), summary.completed(), valueOrNone(summary.cacheFailure()),
                 valueOrNone(summary.processingFailure()), summary.elapsed());
@@ -226,28 +221,6 @@ public class OhsomeV2EnrichmentService {
 
     private String valueOrNone(String value) {
         return value == null ? "none" : value;
-    }
-
-    private DatasetBounds datasetBounds() {
-        long fromInclusive = properties.startMonthValue().atDay(1)
-                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
-        long toExclusive = properties.endMonthValue().plusMonths(1).atDay(1)
-                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
-        List<Double> bbox = properties.getBbox();
-        return new DatasetBounds(
-                fromInclusive, toExclusive,
-                bbox.get(0), bbox.get(1), bbox.get(2), bbox.get(3)
-        );
-    }
-
-    private record DatasetBounds(
-            long fromInclusive,
-            long toExclusive,
-            double minLon,
-            double minLat,
-            double maxLon,
-            double maxLat
-    ) {
     }
 
     private record PreparedBatch(
@@ -269,15 +242,14 @@ public class OhsomeV2EnrichmentService {
         private long ambiguousPairs;
         private long errorPairs;
         private long updatedEvents;
-        private long outsideTimeRange;
-        private long outsideArea;
+        private long invalidEvents;
         private long releasedEvents;
         private boolean interrupted;
         private String cacheFailure;
         private String processingFailure;
 
         private long changedEvents() {
-            return updatedEvents + outsideTimeRange + outsideArea;
+            return updatedEvents + invalidEvents;
         }
 
         private void addCommitted(PreparedBatch prepared) {
@@ -304,8 +276,7 @@ public class OhsomeV2EnrichmentService {
                     ambiguousPairs,
                     errorPairs,
                     updatedEvents,
-                    outsideTimeRange,
-                    outsideArea,
+                    invalidEvents,
                     releasedEvents,
                     counts.pending(),
                     counts.processing(),
@@ -331,8 +302,7 @@ public class OhsomeV2EnrichmentService {
             long ambiguousPairs,
             long errorPairs,
             long updatedEvents,
-            long outsideTimeRange,
-            long outsideArea,
+            long invalidEvents,
             long releasedEvents,
             long pendingEvents,
             long processingEvents,
@@ -346,7 +316,7 @@ public class OhsomeV2EnrichmentService {
     ) {
         private static DrainSummary noWork() {
             return new DrainSummary(
-                    true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                     0, 0, 0, 0, 0, false, null, null, Duration.ZERO
             );
         }
