@@ -446,6 +446,8 @@ Ranks spatially connected, same-named street corridors by distinct rides carryin
 
 `scaryIncidentCount` comes from a separate spatial join against `incidents` within 25 metres of the corridor's unioned geometry (filtered by `scary=true`, the same time window, and the incident's own ride intent) — it is not derived from the corridor's avoidance/preference events. `topSegmentId` is the statistical mode of segment IDs among the corridor's events of the ranked type (the single most-touched segment); `segmentIds` lists every segment ID in the corridor.
 
+The query selects the top corridors before building their unioned geometries and filters out non-scary incidents in the spatial join. A GiST index on `incidents.location::geography` supports the distance lookup. The backend creates this index automatically through `schema.sql` after Hibernate initializes the tables.
+
 ```json
 [
     {

@@ -3,8 +3,12 @@ package berlin.tu.cyclinginfrastructurebackend.service.DataProviders.VIZ.RoadClo
 import berlin.tu.cyclinginfrastructurebackend.domain.RoadClosure;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.ExternalFactorType;
 import berlin.tu.cyclinginfrastructurebackend.repository.RoadClosureRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.SegmentExternalFactorRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
@@ -20,11 +24,85 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 
 class RoadClosureImportServiceTest {
 
     @TempDir
     Path tempDir;
+
+    @ParameterizedTest
+    @CsvSource({"true,true,false", "true,false,true", "false,true,true"})
+    void disabledPipelineSkipsStartupImportIndexAndRefresh(boolean pipeline, boolean enrichment, boolean viz) {
+        assertDisabled(
+                "pipeline.enabled=" + pipeline,
+                "pipeline.enrichment.enabled=" + enrichment,
+                "pipeline.enrichment.berlin-open-data.enabled=" + viz);
+    }
+
+    @Test
+    void missingProviderSwitchDefaultsToDisabled() {
+        assertDisabled();
+    }
+
+    private void assertDisabled(String... properties) {
+        RoadClosureRepository repository = mock(RoadClosureRepository.class);
+        RestClient client = mock(RestClient.class);
+        contextRunner(repository, client).withPropertyValues(properties).run(context -> {
+            assertThat(context).hasNotFailed();
+            RoadClosureImportService importer = context.getBean(RoadClosureImportService.class);
+            assertThat(importer.isEnabled()).isFalse();
+            assertThat(importer.ensureImported()).isFalse();
+            importer.refresh();
+
+            // Includes the provider's actual @PostConstruct call during context startup.
+            verifyNoInteractions(repository, client);
+            assertThat(tempDir.resolve("cache/closures.json")).doesNotExist();
+        });
+    }
+
+    @Test
+    void enabledProviderStillImportsBuildsIndexAndRefreshes() {
+        RoadClosureRepository repository = mock(RoadClosureRepository.class);
+        when(repository.existsByFeedIdStartingWith("historical:")).thenReturn(true);
+        when(repository.count()).thenReturn(1L);
+        RestClient client = mock(RestClient.class, RETURNS_DEEP_STUBS);
+        when(client.get().uri("https://example.invalid/closures.json").retrieve().body(byte[].class))
+                .thenReturn("{\"features\":[]}".getBytes(StandardCharsets.UTF_8));
+        org.mockito.Mockito.clearInvocations(client);
+
+        contextRunner(repository, client)
+                .withPropertyValues("pipeline.enrichment.berlin-open-data.enabled=true")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    RoadClosureImportService importer = context.getBean(RoadClosureImportService.class);
+                    assertThat(importer.isEnabled()).isTrue();
+                    verify(repository).findAll();
+                    verify(repository).existsByFeedIdStartingWith("historical:");
+                    verify(client).get();
+
+                    importer.refresh();
+
+                    verify(client, times(2)).get();
+                    assertThat(tempDir.resolve("cache/closures.json")).exists();
+                });
+    }
+
+    private ApplicationContextRunner contextRunner(RoadClosureRepository repository, RestClient client) {
+        RestClient.Builder builder = mock(RestClient.Builder.class);
+        when(builder.build()).thenReturn(client);
+        return new ApplicationContextRunner()
+                .withPropertyValues(
+                        "enrichment.berlin-open-data.url=https://example.invalid/closures.json",
+                        "enrichment.berlin-open-data.cache-file=" + tempDir.resolve("cache/closures.json"))
+                .withBean(RoadClosureRepository.class, () -> repository)
+                .withBean(SegmentExternalFactorRepository.class, () -> mock(SegmentExternalFactorRepository.class))
+                .withBean(RestClient.Builder.class, () -> builder)
+                .withBean(RoadClosureImportService.class)
+                .withBean(RoadClosureDataProvider.class);
+    }
 
     @Test
     void normalizesLegacySnapshotsAndUsesBeendetAsTheEndTimestamp() throws Exception {

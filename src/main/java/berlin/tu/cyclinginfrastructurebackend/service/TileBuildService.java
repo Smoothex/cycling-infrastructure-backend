@@ -165,6 +165,10 @@ public class TileBuildService {
         dataVersion.incrementAndGet();
     }
 
+    public long dataVersion() {
+        return dataVersion.get();
+    }
+
     /**
      * Rebuilds only after all tracked pipeline work has been idle for the configured quiet period.
      * Version tracking keeps changes that arrive during a build pending for the next pass.

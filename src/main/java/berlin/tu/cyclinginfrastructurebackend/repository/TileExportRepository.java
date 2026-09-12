@@ -70,7 +70,7 @@ public class TileExportRepository {
      */
     private static final int BALANCE_PRIOR_STRENGTH = 5;
 
-    private static String balanceExpression(String avoidance, String preference) {
+    static String balanceExpression(String avoidance, String preference) {
         String total = "(" + avoidance + " + " + preference + ")";
         return """
                 CASE
@@ -80,7 +80,7 @@ public class TileExportRepository {
                 END""".formatted(total, preference, avoidance, total, BALANCE_PRIOR_STRENGTH);
     }
 
-    private static String bucketCase(String eventCount, String balance) {
+    static String bucketCase(String eventCount, String balance) {
         return """
                 CASE
                     WHEN %s = 0 THEN 'NO_EVENTS'

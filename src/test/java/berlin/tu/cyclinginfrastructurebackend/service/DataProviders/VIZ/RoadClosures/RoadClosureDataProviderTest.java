@@ -38,6 +38,7 @@ class RoadClosureDataProviderTest {
         closure.setValidTo(3_000L);
         closure.setGeometry(geometryFactory.createPoint(new Coordinate(13.005, 52.0001)));
 
+        when(importService.isEnabled()).thenReturn(true);
         when(importService.ensureImported()).thenReturn(true);
         when(closureRepository.findAll()).thenReturn(List.of(closure));
         when(factorRepository.existsBySegmentIdAndFactorTypeAndSourceAndValidFrom(
@@ -89,6 +90,7 @@ class RoadClosureDataProviderTest {
                 geometryFactory.createPoint(new Coordinate(13.006, 52.0001))
         );
 
+        when(importService.isEnabled()).thenReturn(true);
         when(importService.ensureImported()).thenReturn(true);
         when(closureRepository.findAll()).thenReturn(List.of(first, second));
         when(factorRepository.existsBySegmentIdAndFactorTypeAndSourceAndValidFrom(

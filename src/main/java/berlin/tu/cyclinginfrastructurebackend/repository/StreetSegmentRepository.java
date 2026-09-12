@@ -276,22 +276,9 @@ public interface StreetSegmentRepository
                   AND LOWER(TRIM(s.street_name)) <> 'unknown'
                   AND s.geometry IS NOT NULL
             ),
-            corridor_geometries AS (
-                SELECT LOWER(TRIM(street_name)) AS normalized_name,
-                       MIN(street_name) AS street_name,
-                       corridor_cluster,
-                       COUNT(*) AS segment_count,
-                       STRING_AGG(id::text, ',' ORDER BY id) AS segment_ids,
-                       ST_UnaryUnion(ST_Collect(geometry)) AS geometry,
-                       ST_XMin(ST_Extent(geometry)) AS min_lon,
-                       ST_YMin(ST_Extent(geometry)) AS min_lat,
-                       ST_XMax(ST_Extent(geometry)) AS max_lon,
-                       ST_YMax(ST_Extent(geometry)) AS max_lat
-                FROM clustered_segments
-                GROUP BY LOWER(TRIM(street_name)), corridor_cluster
-            ),
             corridor_counts AS (
                 SELECT LOWER(TRIM(cs.street_name)) AS normalized_name,
+                       MIN(cs.street_name) AS street_name,
                        cs.corridor_cluster,
                        COUNT(DISTINCT fe.ride_id) FILTER (WHERE fe.event_type = 'AVOIDANCE') AS avoidance_rides,
                        COUNT(DISTINCT fe.ride_id) FILTER (WHERE fe.event_type = 'PREFERENCE') AS preference_rides,
@@ -303,18 +290,38 @@ public interface StreetSegmentRepository
                 JOIN clustered_segments cs ON cs.id = fe.segment_id
                 GROUP BY LOWER(TRIM(cs.street_name)), cs.corridor_cluster
             ),
-            candidates AS (
-                SELECT cg.*, cc.avoidance_rides, cc.preference_rides,
-                       cc.avoidance_events, cc.preference_events, cc.top_segment_id
-                FROM corridor_geometries cg
-                JOIN corridor_counts cc
-                  ON cc.normalized_name = cg.normalized_name
-                 AND cc.corridor_cluster = cg.corridor_cluster
+            top_corridors AS MATERIALIZED (
+                SELECT cc.*
+                FROM corridor_counts cc
                 WHERE CASE WHEN :rank = 'PREFERENCE' THEN cc.preference_rides ELSE cc.avoidance_rides END >= :minRideCount
                 ORDER BY CASE WHEN :rank = 'PREFERENCE' THEN cc.preference_rides ELSE cc.avoidance_rides END DESC,
                          CASE WHEN :rank = 'PREFERENCE' THEN cc.preference_events ELSE cc.avoidance_events END DESC,
-                         cg.street_name
+                         cc.street_name
                 LIMIT :limit
+            ),
+            corridor_geometries AS (
+                SELECT LOWER(TRIM(cs.street_name)) AS normalized_name,
+                       cs.corridor_cluster,
+                       COUNT(*) AS segment_count,
+                       STRING_AGG(cs.id::text, ',' ORDER BY cs.id) AS segment_ids,
+                       ST_UnaryUnion(ST_Collect(cs.geometry)) AS geometry,
+                       ST_XMin(ST_Extent(cs.geometry)) AS min_lon,
+                       ST_YMin(ST_Extent(cs.geometry)) AS min_lat,
+                       ST_XMax(ST_Extent(cs.geometry)) AS max_lon,
+                       ST_YMax(ST_Extent(cs.geometry)) AS max_lat
+                FROM clustered_segments cs
+                JOIN top_corridors tc
+                  ON tc.normalized_name = LOWER(TRIM(cs.street_name))
+                 AND tc.corridor_cluster = cs.corridor_cluster
+                GROUP BY LOWER(TRIM(cs.street_name)), cs.corridor_cluster
+            ),
+            candidates AS (
+                SELECT tc.*, cg.segment_count, cg.segment_ids, cg.geometry,
+                       cg.min_lon, cg.min_lat, cg.max_lon, cg.max_lat
+                FROM top_corridors tc
+                JOIN corridor_geometries cg
+                  ON cg.normalized_name = tc.normalized_name
+                 AND cg.corridor_cluster = tc.corridor_cluster
             )
             SELECT c.street_name,
                    c.avoidance_rides,
@@ -328,13 +335,13 @@ public interface StreetSegmentRepository
                    c.max_lat,
                    c.top_segment_id,
                    COUNT(DISTINCT i.id) FILTER (
-                       WHERE i.scary = true
-                         AND (:rideIntent = '' OR ir.ride_intent = :rideIntent)
+                       WHERE (:rideIntent = '' OR ir.ride_intent = :rideIntent)
                    ) AS scary_incidents,
                    c.segment_ids
             FROM candidates c
             LEFT JOIN incidents i
               ON i.location IS NOT NULL
+             AND i.scary = true
              AND i.timestamp >= :from AND i.timestamp <= :to
              AND ST_DWithin(c.geometry::geography, i.location::geography, 25)
             LEFT JOIN rides ir ON ir.id = i.ride_id

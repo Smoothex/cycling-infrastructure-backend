@@ -6,6 +6,7 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.RoadClosureSeverity;
 import berlin.tu.cyclinginfrastructurebackend.repository.RoadClosureRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.Getter;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.io.geojson.GeoJsonReader;
 import org.slf4j.Logger;
@@ -56,6 +57,10 @@ public class RoadClosureImportService {
     private final Path cacheFile;
     private boolean importAttempted = false;
 
+    @Getter
+    @Value("#{${pipeline.enabled:true} && ${pipeline.enrichment.enabled:true} && ${pipeline.enrichment.berlin-open-data.enabled:false}}")
+    private boolean enabled;
+
     public RoadClosureImportService(RoadClosureRepository roadClosureRepository,
                                     RestClient.Builder restClientBuilder,
                                     @Value("${enrichment.berlin-open-data.url:" + DEFAULT_DATA_URL + "}") String dataUrl,
@@ -71,6 +76,9 @@ public class RoadClosureImportService {
      * road closures are available afterwards (from this import or earlier runs).
      */
     public synchronized boolean ensureImported() {
+        if (!enabled) {
+            return false;
+        }
         if (!importAttempted) {
             importAttempted = true;
             importHistoricalSnapshots(historicalDirectory());
@@ -239,6 +247,9 @@ public class RoadClosureImportService {
             fixedDelayString = "${enrichment.road-closures.refresh-ms:86400000}",
             initialDelayString = "${enrichment.road-closures.refresh-ms:86400000}")
     public synchronized void refresh() {
+        if (!enabled) {
+            return;
+        }
         String json = fetchGeoJson();
         if (json == null) {
             log.warn("No VIZ road-closure data available; keeping existing road_closures rows.");
