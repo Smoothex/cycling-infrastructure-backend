@@ -10,7 +10,7 @@ The end result is a per-segment dataset answering: *which streets do cyclists ac
 - **PostgreSQL 17 + PostGIS 3.4** - spatial queries, geometry storage
 - **GraphHopper 11** - OSM routing, map matching
 - **Tippecanoe 2.78.0** - vector tile generation (PMTiles)
-- **Hibernate** with `ddl-auto=update` (no migration files; schema is auto-managed)
+- **Hibernate** with `ddl-auto=update`; `schema.sql` adds PostgreSQL expression indexes after Hibernate initializes the tables.
 
 ## Local Development
 
@@ -88,6 +88,10 @@ Snapshots are requested only for buffered 0.1° tiles containing pending events,
 GeoParquet files are checksummed and cached under `./data/ohsome/v2/tiles-v1/{tile-id}/{month}.parquet`;
 matching then runs locally for each distinct street-segment/month pair. See
 [docs/external-enrichments.md](docs/external-enrichments.md) for the temporal approximation and matching rules.
+
+### Other German cities
+
+Rides from other German cities can be imported into the same database by placing files in the existing SimRa format and folder structure under `simra.data.path`. Filenames must be unique across regional datasets; enable import and restart the backend to pick up new files. Route comparison, ohsome, and weather enrichment use the ride or segment coordinates and require no city registration. VIZ traffic and road-disruption sources remain Berlin-only and can be disabled when not needed.
 
 ### Key config properties
 

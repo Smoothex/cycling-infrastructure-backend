@@ -13,6 +13,8 @@ import berlin.tu.cyclinginfrastructurebackend.service.PipelineActivityTracker;
 import berlin.tu.cyclinginfrastructurebackend.service.PipelineWorkClaimService;
 import berlin.tu.cyclinginfrastructurebackend.service.TileBuildService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -24,8 +26,31 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class ExternalFactorEnrichmentSchedulerTest {
+
+    @ParameterizedTest
+    @CsvSource({"true,true,false", "true,false,true", "false,true,true"})
+    void disabledVizJobsDoNotClaimEventsOrInitializeProviders(boolean pipeline, boolean enrichment, boolean viz) {
+        SegmentEventRepository repository = mock(SegmentEventRepository.class);
+        RoadClosureDataProvider closures = mock(RoadClosureDataProvider.class);
+        TrafficDataProvider traffic = mock(TrafficDataProvider.class);
+        PipelineWorkClaimService claims = mock(PipelineWorkClaimService.class);
+        ExternalFactorEnrichmentScheduler scheduler = new ExternalFactorEnrichmentScheduler(
+                repository, mock(OpenMeteoBulkEnrichmentService.class), new OpenMeteoProperties(),
+                closures, mock(OhsomeV2EnrichmentService.class), traffic, claims,
+                mock(TileBuildService.class), new PipelineActivityTracker());
+        ReflectionTestUtils.setField(scheduler, "pipelineEnabled", pipeline);
+        ReflectionTestUtils.setField(scheduler, "enrichmentEnabled", enrichment);
+        ReflectionTestUtils.setField(scheduler, "berlinOpenDataEnabled", viz);
+        ReflectionTestUtils.setField(scheduler, "trafficEnabled", viz);
+
+        scheduler.enrichBerlinOpenDataPending();
+        scheduler.enrichTrafficPending();
+
+        verifyNoInteractions(repository, closures, traffic, claims);
+    }
 
     @Test
     void weatherEnrichmentInvokesExactlyOneBulkBatch() {

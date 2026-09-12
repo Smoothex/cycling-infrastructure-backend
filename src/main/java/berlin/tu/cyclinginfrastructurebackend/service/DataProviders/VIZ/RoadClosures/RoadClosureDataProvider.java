@@ -56,6 +56,9 @@ public class RoadClosureDataProvider implements ExternalDataProvider {
 
     @PostConstruct
     void buildIndex() {
+        if (!importService.isEnabled()) {
+            return;
+        }
         if (!importService.ensureImported()) {
             log.warn("No VIZ road-closure data available. Road-closure enrichment disabled.");
             return;
