@@ -14,59 +14,99 @@ The end result is a per-segment dataset answering: *which streets do cyclists ac
 
 ## Local Development
 
-### Create the SimRa network (required once)
-```bash
-docker network create simra_simra-network
-```
+### Start the backend and PostgreSQL
 
-### Start PostgreSQL and pg_admin
-
-```bash
-docker compose up -d
-```
-
-The base configuration is durable and keeps PostgreSQL's recyclable WAL working set near a
-2 GB soft target. `archive_mode` is off and the development setup has no replication slots, so
-old WAL files are recycled after checkpoints rather than retained as history.
-
-### Non-durable bulk-import database mode
-
-For a database that can be recreated entirely from the source ride files, an opt-in profile
-disables PostgreSQL crash durability:
+Use `compose.yaml` for both importing and serving data. Set `SIMRA_HOST_PATH` in `.env`
+to the directory containing `Rides`, for example `/path/to/Berlin`.
+Set `POSTGRES_PASSWORD` there before initializing a server database;
+the fallback password is intended for local development. The mounted source directory
+must already exist.
 
 ```bash
-docker compose -f compose.yaml -f compose.bulk-import.yaml up -d postgres
+mkdir -p data
+docker compose up -d --build
 ```
 
-This runs with `fsync=off`, `full_page_writes=off`, and `synchronous_commit=off`. It still
-generates WAL for normal inserts and updates, but avoids forcing it to durable storage. A host,
-Docker, or PostgreSQL crash can leave the database corrupt; recreate and re-import it rather
-than trusting crash recovery.
+Both services start by default and ride importing is enabled. To start them separately,
+run `docker compose up -d postgres`, followed by `docker compose up -d --build backend`.
+Set `PIPELINE_IMPORT_ENABLED=false` in `.env` to start without importing rides.
+Once all available files have been attempted, restart the backend to discover new files.
 
-Switch back to durable mode after a clean shutdown with:
+Each enrichment can be enabled or disabled in the backend's Compose environment
+section, or with the corresponding variable in `.env`:
+
+| Variable | Default | Controls |
+| --- | --- | --- |
+| `PIPELINE_ENABLED` | `true` | Overall pipeline |
+| `PIPELINE_IMPORT_ENABLED` | `true` | Ride import |
+| `PIPELINE_ENRICHMENT_ENABLED` | `true` | All enrichment stages |
+| `PIPELINE_ENRICHMENT_WEATHER_ENABLED` | `false` | Weather |
+| `PIPELINE_ENRICHMENT_OHSOME_ENABLED` | `true` | Historical OSM data |
+| `PIPELINE_ENRICHMENT_BERLINOPENDATA_ENABLED` | `false` | Road disruptions |
+| `PIPELINE_ENRICHMENT_TRAFFIC_ENABLED` | `false` | Traffic measurements |
+
+Set `HEIGIT_API_KEY` in `.env` for Ohsome downloads. After changing environment
+variables, apply them with `docker compose up -d`. Batch sizes, thread pools and
+Hikari connection-pool settings are defined in `application.properties`; changes
+to that file require rebuilding the backend image.
+
+The project name is `cycling-infrastructure`; Compose creates its own network and a
+named PostgreSQL volume. It does not join the existing frontend's network. Frontend
+proxy routing must be configured separately when integrating this backend.
+
+Published ports are bound to localhost:
+
+| Service | Host port | Container port | Optional `.env` override |
+| --- | --- | --- | --- |
+| Backend | 18080 | 8080 | `BACKEND_HOST_PORT` |
+| PostgreSQL | 15432 | 5432 | `POSTGRES_HOST_PORT` |
+| pgAdmin | 15050 | 80 | `PGADMIN_HOST_PORT` |
+
+The backend connects to `postgres:5432` inside Docker. `EXPOSE 8080` in the Dockerfile
+describes the container port; change the host mapping in Compose to avoid host conflicts.
+
+pgAdmin is optional:
 
 ```bash
-docker compose -f compose.yaml stop postgres
-docker compose -f compose.yaml up -d postgres
+docker compose --profile admin up -d pgadmin
 ```
 
-### Run the backend locally
-```bash
-./gradlew bootRun
-```
+Set `PGADMIN_PASSWORD` in `.env` before using it on the server. Within pgAdmin, connect
+to host `postgres`, port `5432`, database `cyclingdb`, and user `user`.
 
-### Run the backend in Docker
-```bash
-docker compose --profile app up -d --build
-```
+### Database settings and resource limits
 
+PostgreSQL always runs with `fsync=off`, `full_page_writes=off`, and
+`synchronous_commit=off`, including after the import. These non-durable settings can
+leave the database corrupt after a crash and require recreating it from source data.
+WAL compression is enabled; `max_wal_size=2GB` is a soft target, not a disk-space cap.
+The database volume persists across container replacement; `docker compose down -v`
+deletes it.
 
-The Docker image is multi-stage: it compiles Tippecanoe from source, then builds the Spring Boot fat JAR, and runs with `-Xms2g -Xmx8g`. The container mounts `./data` for OSM files, the GraphHopper cache, tile output, and traffic cache.
+The backend is limited to 6 GiB and 1.5 CPUs, with a 5 GiB maximum Java heap, eight
+database connections, and one ride-import worker processing batches of 20. PostgreSQL
+is limited to 1 GiB and 0.5 CPU, with 128 MiB shared buffers, 4 MiB work memory per
+operation, and 30 connections. Adjust these limits to the available host resources;
+graph construction and sustained importing require resource monitoring.
+Optional pgAdmin adds a 256 MiB memory limit.
 
-The SimRa ride files are mounted from `/Users/momchil.petrov/Downloads/SimRa` - update the volume path in `compose.yaml` to match your local SimRa data directory.
+### Input files and caches
 
+`SIMRA_HOST_PATH` selects the host input directory. Compose mounts it read-only at
+`/app/data/SimRa`, and `SIMRA_DATA_PATH` overrides Spring's `simra.data.path` to point
+there. Keep `Rides` in the container-visible path. Profile files are not imported.
 
-The app starts on `http://localhost:8080`. On first boot, the OSM extract is downloaded automatically (see below), then GraphHopper builds its routing graph from it - this takes several minutes and produces a cache at `./data/graphhopper-cache`. As part of this, GraphHopper also prepares a Contraction Hierarchy (CH) for the `bike_shortest` profile, which takes roughly 15-20 minutes on the full Germany extract. Both the graph and the CH files are cached to disk, so this cost is paid once - subsequent restarts just load the existing cache (look for `There are no CHs to prepare` in the logs).
+`APP_DATA_PATH` selects writable runtime storage, defaulting to `./data`; it must exist.
+`TILES_DIRECTORY` selects the tile-output directory inside the container, defaulting
+to `/app/data/tiles`. Generated tiles belong to the database from which they were built.
+The input directory controls which ride files are imported; the batch size does not
+limit the total number of files.
+
+The Docker image builds Tippecanoe and the Spring Boot JAR. The backend is available at
+`http://localhost:18080`. On first boot, it downloads the OSM extract if missing and
+builds the routing graph, including the Contraction Hierarchy for `bike_shortest`.
+This happens even when ride importing is disabled. Subsequent starts load the existing
+compatible graph from `./data/graphhopper-cache` without repeating that preparation.
 
 GraphHopper caches the profile definitions and encoded access values as part of the routing graph. After changing or upgrading the profiles, delete `./data/graphhopper-cache` before starting the application so GraphHopper imports the OSM data with the current definitions. This profile update requires a rebuild even if the previous cache also contained a profile named `bike_shortest`. The current profiles are documented in [detour-analysis.md](docs/detour-analysis.md#2-shortest-path-computation).
 

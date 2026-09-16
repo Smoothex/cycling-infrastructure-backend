@@ -30,4 +30,4 @@ COPY --from=builder /tmp/app.jar /app/app.jar
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-Xms2g", "-Xmx10g", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-Xms512m", "-Xmx5g", "-jar", "/app/app.jar"]
