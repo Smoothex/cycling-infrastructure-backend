@@ -3,12 +3,13 @@ package berlin.tu.cyclinginfrastructurebackend.service;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RideIntent;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.RouteComparisonType;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.SegmentEventType;
-import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.AnalyticsReadRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsFilterOptionsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.InfrastructureSignalsDto;
@@ -22,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -32,6 +34,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 class ApiAnalyticsServiceTest {
@@ -40,11 +44,13 @@ class ApiAnalyticsServiceTest {
     private final RideRepository rideRepository = mock(RideRepository.class);
     private final StreetSegmentRepository streetSegmentRepository = mock(StreetSegmentRepository.class);
     private final SegmentEventRepository segmentEventRepository = mock(SegmentEventRepository.class);
+    private final AnalyticsReadRepository analyticsReadRepository = mock(AnalyticsReadRepository.class);
     private final ApiAnalyticsService service = new ApiAnalyticsService(
             rideRepository,
             streetSegmentRepository,
             segmentEventRepository,
             entityManager,
+            analyticsReadRepository,
             0.10,
             500.0,
             0.30);
@@ -55,13 +61,17 @@ class ApiAnalyticsServiceTest {
         org.mockito.Mockito.reset(rideRepository);
         org.mockito.Mockito.reset(streetSegmentRepository);
         org.mockito.Mockito.reset(segmentEventRepository);
+        org.mockito.Mockito.reset(analyticsReadRepository);
     }
 
     @Test
     void processingSummarySeparatesStatusAndRouteComparisonCounts() {
-        when(rideRepository.count()).thenReturn(10L);
-        when(rideRepository.countByStatus(Status.PROCESSED)).thenReturn(7L);
-        when(rideRepository.countByRouteComparisonType(RouteComparisonType.LOCAL_DETOUR)).thenReturn(4L);
+        when(analyticsReadRepository.rideCounts()).thenReturn(new AnalyticsReadRepository.RideCounts(
+                10L, Map.of("PROCESSED", 7L), Map.of(
+                "EQUIVALENT_ROUTE", 0L, "LOCAL_DETOUR", 4L, "CORRIDOR_ALTERNATIVE", 0L)));
+        when(analyticsReadRepository.eventCounts()).thenReturn(new AnalyticsReadRepository.EventCounts(
+                30L, 1000L, 2000L, 18L, 12L, 5L, 6L, 7L, 8L, 9L));
+        when(analyticsReadRepository.segmentCounts()).thenReturn(new AnalyticsReadRepository.SegmentCounts(20L, 12L));
         when(segmentEventRepository.countRoadDisruptionAffectedEvents()).thenReturn(11L);
 
         ProcessingSummaryDto result = service.getProcessingSummary();
@@ -71,6 +81,26 @@ class ApiAnalyticsServiceTest {
         assertThat(result.routeComparisonTypeCounts()).containsKeys(
                 "EQUIVALENT_ROUTE", "LOCAL_DETOUR", "CORRIDOR_ALTERNATIVE");
         assertThat(result.roadDisruptionAffectedEvents()).isEqualTo(11L);
+        assertThat(result).isEqualTo(new ProcessingSummaryDto(
+                10L, Map.of("PROCESSED", 7L), Map.of(
+                "EQUIVALENT_ROUTE", 0L, "LOCAL_DETOUR", 4L, "CORRIDOR_ALTERNATIVE", 0L),
+                20L, 12L, 30L, 1000L, 2000L,
+                Map.of("AVOIDANCE", 18L, "PREFERENCE", 12L), 5L, 6L, 7L, 8L, 9L, 11L));
+        verify(analyticsReadRepository).rideCounts();
+        verify(analyticsReadRepository).eventCounts();
+        verify(analyticsReadRepository).segmentCounts();
+        verify(segmentEventRepository).countRoadDisruptionAffectedEvents();
+        verifyNoMoreInteractions(analyticsReadRepository, segmentEventRepository);
+        verifyNoInteractions(rideRepository, streetSegmentRepository, entityManager);
+    }
+
+    @Test
+    void filterOptionsUseOnlyTheLightweightReadRepository() {
+        var options = new AnalyticsFilterOptionsDto(List.of("COMMUTE", "UNKNOWN"), List.of("LIGHT"));
+        when(analyticsReadRepository.filterOptions()).thenReturn(options);
+
+        assertThat(service.getFilterOptions()).isEqualTo(options);
+        verifyNoInteractions(rideRepository, streetSegmentRepository, segmentEventRepository, entityManager);
     }
 
     @Test

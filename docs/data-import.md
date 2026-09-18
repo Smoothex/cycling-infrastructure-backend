@@ -6,6 +6,9 @@ The only data source currently imported is **SimRa** — a community cycling saf
 
 Import runs in bounded batches during one backend run. It keeps scheduling batches until the source scan is exhausted, then stops scanning until the backend is restarted.
 
+For `.env` setup, startup commands, cache paths, networking, and throughput settings,
+see [Running the backend](../README.md#running-the-backend).
+
 ---
 
 ## SimRa File Format
@@ -47,7 +50,7 @@ The loader scans the SimRa data path recursively for files that:
 - Have not already been imported (checked against `rides.original_filename`)
 - Have not been attempted in the current run (in-memory dedup to avoid retrying known-bad files)
 
-Up to `pipeline.import.batch-size` (default: 100) files are processed per cycle.
+Up to `pipeline.import.batch-size` (configured default: 20) files are processed per cycle.
 
 If a scan returns fewer files than the batch limit, the source tree was exhausted and the importer stops immediately after that final batch completes. If a scan returns exactly the limit, another scan determines whether another batch remains. Once complete, later scheduled callbacks return without querying the database or walking the source volume. A backend restart starts a new import run, allowing newly added files and previously failed files to be considered again.
 
@@ -106,7 +109,7 @@ A file counts as committed only after the final transaction succeeds. If the fin
 
 ### Step 5 — Parallel Execution
 
-Files within a batch are processed in parallel using a `ForkJoinPool` sized to `pipeline.import.thread-pool-size` (default: 4). GraphHopper's map matcher is thread-safe.
+Files within a batch use a `ForkJoinPool` sized to `pipeline.import.thread-pool-size` (configured default: 1). Increasing this value allows parallel ride processing; increasing the batch size alone does not. See [Throughput and resource settings](../README.md#throughput-and-resource-settings) before tuning it.
 
 ---
 

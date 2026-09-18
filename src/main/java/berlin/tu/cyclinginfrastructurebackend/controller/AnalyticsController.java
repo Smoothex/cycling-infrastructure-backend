@@ -9,6 +9,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
 import berlin.tu.cyclinginfrastructurebackend.service.RouteComparisonExportService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsFilterOptionsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorGeometryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto;
@@ -51,6 +52,11 @@ public class AnalyticsController {
     @GetMapping("/pipeline-status")
     public PipelineStatusDto getPipelineStatus() {
         return analyticsService.getPipelineStatus();
+    }
+
+    @GetMapping("/filter-options")
+    public AnalyticsFilterOptionsDto getFilterOptions() {
+        return analyticsService.getFilterOptions();
     }
 
     @GetMapping("/route-comparisons")

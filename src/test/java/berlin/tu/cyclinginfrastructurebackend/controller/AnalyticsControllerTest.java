@@ -8,6 +8,7 @@ import berlin.tu.cyclinginfrastructurebackend.service.CorridorGeometryService;
 import berlin.tu.cyclinginfrastructurebackend.service.RouteComparisonExportService;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsFilterOptionsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorGeometryDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
@@ -67,6 +68,20 @@ class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.matchingEventCount").value(300));
 
         verify(analyticsService).getAnalyticsContext(eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void filterOptionsReturnObservedCategoriesWithoutDistributionMetrics() throws Exception {
+        when(analyticsService.getFilterOptions()).thenReturn(new AnalyticsFilterOptionsDto(
+                List.of("COMMUTE", "UNKNOWN"), List.of("LIGHT", "HEAVY")));
+
+        mockMvc.perform(get("/api/analytics/filter-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rideIntents[0]").value("COMMUTE"))
+                .andExpect(jsonPath("$.rideIntents[1]").value("UNKNOWN"))
+                .andExpect(jsonPath("$.trafficConditions[0]").value("LIGHT"))
+                .andExpect(jsonPath("$.trafficConditions[1]").value("HEAVY"))
+                .andExpect(jsonPath("$.totalCount").doesNotExist());
     }
 
     @Test

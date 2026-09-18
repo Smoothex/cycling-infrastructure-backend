@@ -8,10 +8,12 @@ import berlin.tu.cyclinginfrastructurebackend.domain.enums.EnrichmentStatus;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.Status;
 import berlin.tu.cyclinginfrastructurebackend.domain.enums.TrafficCondition;
 import berlin.tu.cyclinginfrastructurebackend.repository.RideRepository;
+import berlin.tu.cyclinginfrastructurebackend.repository.AnalyticsReadRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.SegmentEventRepository;
 import berlin.tu.cyclinginfrastructurebackend.repository.StreetSegmentRepository;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalysisDimension;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsContextDto;
+import berlin.tu.cyclinginfrastructurebackend.service.dto.api.AnalyticsFilterOptionsDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.CorridorRankingDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DetourImpactDto;
 import berlin.tu.cyclinginfrastructurebackend.service.dto.api.DimensionBucketDto;
@@ -40,6 +42,7 @@ public class ApiAnalyticsService {
     private final StreetSegmentRepository streetSegmentRepository;
     private final SegmentEventRepository segmentEventRepository;
     private final EntityManager entityManager;
+    private final AnalyticsReadRepository analyticsReadRepository;
     private final double detourThresholdRatio;
     private final double maximumEquivalentExcessDistanceMeters;
     private final double minimumOverlapRatio;
@@ -48,6 +51,7 @@ public class ApiAnalyticsService {
                                StreetSegmentRepository streetSegmentRepository,
                                SegmentEventRepository segmentEventRepository,
                                EntityManager entityManager,
+                               AnalyticsReadRepository analyticsReadRepository,
                                @Value("${analysis.detour.threshold:0.10}") double detourThresholdRatio,
                                @Value("${analysis.detour.maximum-equivalent-excess-meters:500}")
                                double maximumEquivalentExcessDistanceMeters,
@@ -57,44 +61,41 @@ public class ApiAnalyticsService {
         this.streetSegmentRepository = streetSegmentRepository;
         this.segmentEventRepository = segmentEventRepository;
         this.entityManager = entityManager;
+        this.analyticsReadRepository = analyticsReadRepository;
         this.detourThresholdRatio = detourThresholdRatio;
         this.maximumEquivalentExcessDistanceMeters = maximumEquivalentExcessDistanceMeters;
         this.minimumOverlapRatio = minimumOverlapRatio;
     }
 
     public ProcessingSummaryDto getProcessingSummary() {
-        Map<String, Long> rideStatusCounts = new LinkedHashMap<>();
-        for (Status status : Status.values()) {
-            rideStatusCounts.put(status.name(), rideRepository.countByStatus(status));
-        }
-
-        Map<String, Long> routeComparisonTypeCounts = new LinkedHashMap<>();
-        for (RouteComparisonType type : RouteComparisonType.values()) {
-            routeComparisonTypeCounts.put(type.name(), rideRepository.countByRouteComparisonType(type));
-        }
-
+        var rides = analyticsReadRepository.rideCounts();
+        var events = analyticsReadRepository.eventCounts();
+        var segments = analyticsReadRepository.segmentCounts();
         Map<String, Long> eventTypeCounts = new LinkedHashMap<>();
-        for (SegmentEventType eventType : SegmentEventType.values()) {
-            eventTypeCounts.put(eventType.name(), segmentEventRepository.countByEventType(eventType));
-        }
+        eventTypeCounts.put(SegmentEventType.AVOIDANCE.name(), events.avoidance());
+        eventTypeCounts.put(SegmentEventType.PREFERENCE.name(), events.preference());
 
         return new ProcessingSummaryDto(
-                rideRepository.count(),
-                rideStatusCounts,
-                routeComparisonTypeCounts,
-                streetSegmentRepository.count(),
-                streetSegmentRepository.countObservedSegments(),
-                segmentEventRepository.count(),
-                segmentEventRepository.findEarliestEventTimestamp(),
-                segmentEventRepository.findLatestEventTimestamp(),
+                rides.total(),
+                rides.statuses(),
+                rides.classifications(),
+                segments.total(),
+                segments.observed(),
+                events.total(),
+                events.earliest(),
+                events.latest(),
                 eventTypeCounts,
-                segmentEventRepository.countByWeatherEnriched(true),
-                segmentEventRepository.countByOhsomeEnriched(true),
-                segmentEventRepository.countByBerlinOpenDataEnriched(true),
-                segmentEventRepository.countByTrafficEnriched(true),
-                segmentEventRepository.countTrafficMeasuredEvents(),
+                events.weather(),
+                events.ohsome(),
+                events.berlinOpenData(),
+                events.traffic(),
+                events.measured(),
                 segmentEventRepository.countRoadDisruptionAffectedEvents()
         );
+    }
+
+    public AnalyticsFilterOptionsDto getFilterOptions() {
+        return analyticsReadRepository.filterOptions();
     }
 
     public PipelineStatusDto getPipelineStatus() {

@@ -1,0 +1,158 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.2.8 Chrome/140.0.7339.240 Electron/38.4.0 Safari/537.36" version="28.2.8">
+  <diagram id="backend-architecture" name="Backend architecture">
+    <mxGraphModel dx="1454" dy="963" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="backend-frame" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2E7D32;strokeWidth=3;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="300" y="105" width="930" height="665" as="geometry" />
+        </mxCell>
+        <mxCell id="backend-header" value="&lt;b&gt;Spring Boot backend&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;Java 25 • Spring Boot 4&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;fontColor=#FFFFFF;fontSize=20;fontStyle=0;align=left;spacingLeft=18;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="300" y="105" width="930" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="api-layer" value="&lt;b&gt;API layer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1976D2;strokeWidth=2;fontColor=#0D47A1;fontSize=17;align=left;verticalAlign=top;spacingTop=10;spacingLeft=14;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="325" y="190" width="880" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="service-layer" value="&lt;b&gt;Service layer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#43A047;strokeWidth=2;fontColor=#1B5E20;fontSize=17;align=left;verticalAlign=top;spacingTop=10;spacingLeft=14;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="325" y="330" width="880" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="data-layer" value="&lt;b&gt;Data access layer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#F9A825;strokeWidth=2;fontColor=#6D4C00;fontSize=17;align=left;verticalAlign=top;spacingTop=10;spacingLeft=14;arcSize=8;" parent="1" vertex="1">
+          <mxGeometry x="325" y="620" width="880" height="125" as="geometry" />
+        </mxCell>
+        <mxCell id="rest-controllers" value="&lt;b&gt;REST controllers&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;segments • analytics • incidents&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#1976D2;strokeWidth=2;fontColor=#15344F;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="365" y="235" width="365" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="tile-controller" value="&lt;b&gt;Tile controller&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;PMTiles download • build status&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#1976D2;strokeWidth=2;fontColor=#15344F;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="785" y="235" width="380" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="ride-processing" value="&lt;b&gt;Ride processing&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;parse • orchestrate map matching&lt;br&gt;compare routes • rate segments&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#43A047;strokeWidth=2;fontColor=#15344F;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="355" y="385" width="245" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="graphhopper" value="&lt;b&gt;GraphHopper integration&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;OSM routing graph&lt;br&gt;GPS map matching&lt;br&gt;neutral shortest path&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FB8C00;strokeWidth=3;fontColor=#7A3E00;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="640" y="385" width="245" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="enrichment" value="&lt;b&gt;Enrichment &amp;amp; analytics&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;weather • traffic • closures&lt;br&gt;historical OSM • aggregations&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#43A047;strokeWidth=2;fontColor=#15344F;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="925" y="385" width="245" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="tile-build" value="&lt;b&gt;Tile export&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;GeoJSON → Tippecanoe → PMTiles&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#8E24AA;strokeWidth=2;fontColor=#4A148C;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="640" y="515" width="245" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="repositories" value="&lt;b&gt;Spring Data JPA / JDBC repositories&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;entities • transactions • aggregates&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#F9A825;strokeWidth=2;fontColor=#5D4037;fontSize=15;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="365" y="667" width="365" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="spatial-export" value="&lt;b&gt;Spatial SQL / GeoJSON export&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;PostGIS queries • tile feature stream&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#F9A825;strokeWidth=2;fontColor=#5D4037;fontSize=15;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="785" y="667" width="380" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="simra-input" value="&lt;b&gt;SimRa rides&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;CSV • GPS • incidents&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#78909C;strokeWidth=2;fontColor=#263238;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="40" y="300" width="205" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="external-data" value="&lt;b&gt;External data&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;weather • traffic • closures&lt;br&gt;historical OSM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#78909C;strokeWidth=2;fontColor=#263238;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="40" y="420" width="205" height="88" as="geometry" />
+        </mxCell>
+        <mxCell id="osm-input" value="&lt;b&gt;OpenStreetMap&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;OSM PBF extract&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FB8C00;strokeWidth=2;fontColor=#7A3E00;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="40" y="545" width="205" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="frontend" value="&lt;b&gt;Map explorer / frontend&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;interactive maps • analytics&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1976D2;strokeWidth=2;fontColor=#0D47A1;fontSize=16;arcSize=10;" parent="1" vertex="1">
+          <mxGeometry x="1330" y="204" width="235" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="pmtiles-file" value="&lt;b&gt;segments.pmtiles&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;static vector tile archive&lt;/font&gt;" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#F3E5F5;strokeColor=#8E24AA;strokeWidth=2;fontColor=#4A148C;fontSize=16;" parent="1" vertex="1">
+          <mxGeometry x="1320" y="504.5" width="235" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="database" value="&lt;b&gt;PostgreSQL 17 + PostGIS 3.4&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:13px&quot;&gt;rides • street segments • events • enrichments&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFF8E1;strokeColor=#F9A825;strokeWidth=2;fontColor=#5D4037;fontSize=16;" parent="1" vertex="1">
+          <mxGeometry x="575" y="795" width="390" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="e-simra-ride" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#546E7A;strokeWidth=2;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="simra-input" target="ride-processing" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="275" y="336" />
+              <mxPoint x="275" y="438" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-external-enrichment" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#546E7A;strokeWidth=2;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="external-data" target="enrichment" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="275" y="464" />
+              <mxPoint x="275" y="370" />
+              <mxPoint x="910" y="370" />
+              <mxPoint x="910" y="438" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-osm-hopper" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#FB8C00;strokeWidth=2;" parent="1" source="osm-input" target="graphhopper" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="275" y="580" />
+              <mxPoint x="275" y="505" />
+              <mxPoint x="763" y="505" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-rest-services" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#1976D2;strokeWidth=2;" parent="1" source="rest-controllers" target="enrichment" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="548" y="320" />
+              <mxPoint x="1048" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-tile-controller" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#8E24AA;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="tile-controller" target="tile-build" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="975" y="320" />
+              <mxPoint x="905" y="320" />
+              <mxPoint x="905" y="547" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-ride-hopper" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#FB8C00;strokeWidth=2;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="ride-processing" target="graphhopper" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-ride-repository" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#43A047;strokeWidth=2;" parent="1" source="ride-processing" target="repositories" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-enrichment-repository" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#43A047;strokeWidth=2;" parent="1" source="enrichment" target="repositories" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1048" y="610" />
+              <mxPoint x="548" y="610" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-tile-export" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#8E24AA;strokeWidth=2;" parent="1" source="tile-build" target="spatial-export" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-repository-db" value="JPA / JDBC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeColor=#F9A825;strokeWidth=2;fontSize=12;fontColor=#6D4C00;labelBackgroundColor=#FFFFFF;" parent="1" source="repositories" target="database" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-spatial-db" value="spatial SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;startArrow=block;startFill=1;strokeColor=#F9A825;strokeWidth=2;fontSize=12;fontColor=#6D4C00;labelBackgroundColor=#FFFFFF;" parent="1" source="spatial-export" target="database" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-rest-output" value="JSON / GeoJSON API" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#1976D2;strokeWidth=2;fontSize=12;fontColor=#0D47A1;labelBackgroundColor=#FFFFFF;" parent="1" source="rest-controllers" target="frontend" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="750" y="205" />
+              <mxPoint x="1270" y="205" />
+              <mxPoint x="1270" y="250" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-tile-output" value="PMTiles / HTTP Range" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#8E24AA;strokeWidth=2;fontSize=12;fontColor=#4A148C;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.65;entryDx=0;entryDy=0;" parent="1" source="tile-controller" target="frontend" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-build-file" value="writes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#8E24AA;strokeWidth=2;fontSize=12;fontColor=#4A148C;labelBackgroundColor=#FFFFFF;" parent="1" source="tile-build" target="pmtiles-file" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-file-controller" value="serves file" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#8E24AA;strokeWidth=2;fontSize=12;fontColor=#4A148C;labelBackgroundColor=#FFFFFF;dashed=1;" parent="1" source="pmtiles-file" target="tile-controller" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1270" y="558" />
+              <mxPoint x="1270" y="320" />
+              <mxPoint x="1100" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
