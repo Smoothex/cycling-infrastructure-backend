@@ -30,6 +30,28 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 class ExternalFactorEnrichmentSchedulerTest {
 
+    @Test
+    void ohsomeQuotaPauseSkipsWorkUntilItExpires() {
+        var ohsome = mock(OhsomeV2EnrichmentService.class);
+        var repository = mock(SegmentEventRepository.class);
+        var scheduler = new ExternalFactorEnrichmentScheduler(
+                repository, mock(OpenMeteoBulkEnrichmentService.class), new OpenMeteoProperties(),
+                mock(RoadClosureDataProvider.class), ohsome, mock(TrafficDataProvider.class),
+                mock(PipelineWorkClaimService.class), mock(TileBuildService.class), new PipelineActivityTracker());
+        ReflectionTestUtils.setField(scheduler, "pipelineEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "enrichmentEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "ohsomeEnabled", true);
+        ReflectionTestUtils.setField(scheduler, "ohsomeBatchSize", 5000);
+        when(ohsome.isQuotaPaused()).thenReturn(true, true, false);
+
+        scheduler.enrichOhsomePending();
+        scheduler.enrichOhsomePending();
+        verify(ohsome, org.mockito.Mockito.never()).drainPending(5000);
+        scheduler.enrichOhsomePending();
+        verify(ohsome).drainPending(5000);
+        verifyNoInteractions(repository);
+    }
+
     @ParameterizedTest
     @CsvSource({"true,true,false", "true,false,true", "false,true,true"})
     void disabledVizJobsDoNotClaimEventsOrInitializeProviders(boolean pipeline, boolean enrichment, boolean viz) {

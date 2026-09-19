@@ -13,7 +13,7 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "ohsome.v2")
 public class OhsomeV2Properties implements InitializingBean {
 
-    private URI baseUrl = URI.create("https://api.heigit.org/ohsome-api-staging/v2");
+    private URI baseUrl = URI.create("https://api.heigit.org/ohsome-api/v2-rc");
     private String apiKey = "";
     private Path cachePath = Path.of("./data/ohsome/v2/tiles-v1");
     private double gridSizeDegrees = 0.1;
@@ -21,6 +21,7 @@ public class OhsomeV2Properties implements InitializingBean {
     private String filter = "type:way and highway=*";
     private boolean clip = false;
     private Duration downloadInterval = Duration.ofSeconds(60);
+    private int maxRequestsPerDay = 250;
     private int maxRetries = 3;
     private Duration initialRetryDelay = Duration.ofMinutes(1);
     private Duration maxRetryDelay = Duration.ofMinutes(30);
@@ -52,6 +53,9 @@ public class OhsomeV2Properties implements InitializingBean {
             throw new IllegalArgumentException("ohsome.v2.filter must not be blank");
         }
         requireNonNegative(downloadInterval, "ohsome.v2.download-interval");
+        if (maxRequestsPerDay <= 0) {
+            throw new IllegalArgumentException("ohsome.v2.max-requests-per-day must be positive");
+        }
         if (maxRetries < 0) {
             throw new IllegalArgumentException("ohsome.v2.max-retries must be non-negative");
         }
@@ -140,6 +144,10 @@ public class OhsomeV2Properties implements InitializingBean {
     public int getMaxRetries() {
         return maxRetries;
     }
+
+    public int getMaxRequestsPerDay() { return maxRequestsPerDay; }
+
+    public void setMaxRequestsPerDay(int maxRequestsPerDay) { this.maxRequestsPerDay = maxRequestsPerDay; }
 
     public void setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;

@@ -131,6 +131,26 @@ class OhsomeV2EnrichmentServiceTest {
     }
 
     @Test
+    void quotaExhaustionReleasesEventsWithoutMarkingThemError() {
+        givenSupportedWorkRemains();
+        List<OhsomeWorkItem> items = List.of(new OhsomeWorkItem(10, JANUARY));
+        when(batchRepository.claimNextBatch(0.1, BATCH_SIZE)).thenReturn(claim(items));
+        when(snapshotCache.ensureSnapshot(TILE, JANUARY)).thenThrow(new OhsomeSnapshotCacheException(
+                OhsomeSnapshotCacheException.FailureKind.QUOTA_EXCEEDED, "automatic retry tomorrow"));
+        when(batchRepository.releaseBatch(items)).thenReturn(7);
+
+        var summary = service.drainPending(BATCH_SIZE);
+
+        assertThat(summary.completed()).isFalse();
+        assertThat(summary.cacheFailure()).isEqualTo("QUOTA_EXCEEDED");
+        assertThat(summary.releasedEvents()).isEqualTo(7);
+        assertThat(summary.errorPairs()).isZero();
+        verify(batchRepository).releaseBatch(items);
+        verify(batchRepository, never()).finalizeBatch(anyList());
+        verifyNoInteractions(snapshotReader, streetSegmentRepository, tileBuildService);
+    }
+
+    @Test
     void finalizesMatchedAmbiguousNoMatchAndErrorResultsInOneMappedBatch() throws Exception {
         givenSupportedWorkRemains();
         Path snapshotPath = Path.of("january.parquet");

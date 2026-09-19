@@ -156,6 +156,7 @@ public class ExternalFactorEnrichmentScheduler {
     @Scheduled(fixedDelayString = "${pipeline.enrichment.ohsome.delay-ms:60000}")
     public void enrichOhsomePending() {
         if (!isEnabled(ohsomeEnabled)) return;
+        if (ohsomeV2EnrichmentService.isQuotaPaused()) return;
         ohsomeV2EnrichmentService.drainPending(ohsomeBatchSize);
     }
 

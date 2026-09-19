@@ -57,6 +57,10 @@ public class OhsomeV2EnrichmentService {
         this.pipelineActivityTracker = pipelineActivityTracker;
     }
 
+    public boolean isQuotaPaused() {
+        return snapshotCache.isQuotaPaused();
+    }
+
     /**
      * Processes all currently pending Ohsome work. The batch size counts distinct
      * segment/month pairs, not individual events.
@@ -121,8 +125,14 @@ public class OhsomeV2EnrichmentService {
                     } else {
                         summary.processingFailure = exception.getClass().getSimpleName();
                     }
-                    log.error("Ohsome stopped at tile={}, month={}; claimed events released to PENDING: {}",
-                            claim.tile().id(), claim.month(), exception.getMessage(), exception);
+                    if (exception instanceof OhsomeSnapshotCacheException cacheException
+                            && cacheException.failureKind() == OhsomeSnapshotCacheException.FailureKind.QUOTA_EXCEEDED) {
+                        log.warn("Ohsome paused at tile={}, month={}; claimed events released to PENDING: {}",
+                                claim.tile().id(), claim.month(), exception.getMessage());
+                    } else {
+                        log.error("Ohsome stopped at tile={}, month={}; claimed events released to PENDING: {}",
+                                claim.tile().id(), claim.month(), exception.getMessage(), exception);
+                    }
                     break;
                 }
             }

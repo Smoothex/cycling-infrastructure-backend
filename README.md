@@ -144,7 +144,7 @@ street segment geometry itself.
 
 Geofabrik serves the **latest** state of OpenStreetMap. The road network in the routing graph therefore reflects today's
 infrastructure, not the infrastructure as it existed when the rides were recorded. The Ohsome enrichment therefore uses
-historical, month-start OSM snapshots from the [ohsome API v2](https://api.heigit.org/ohsome-api-staging/v2/docs).
+historical, month-start OSM snapshots from the [ohsome API v2](https://api.heigit.org/ohsome-api/v2-rc/docs).
 Snapshots are requested only for buffered 0.1° tiles containing pending events, at the start of each event’s UTC month.
 GeoParquet files are checksummed and cached under `./data/ohsome/v2/tiles-v1/{tile-id}/{month}.parquet`;
 matching then runs locally for each distinct street-segment/month pair. See

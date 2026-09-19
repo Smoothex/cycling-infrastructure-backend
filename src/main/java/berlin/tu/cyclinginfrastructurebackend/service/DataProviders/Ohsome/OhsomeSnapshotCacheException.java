@@ -5,6 +5,7 @@ public class OhsomeSnapshotCacheException extends RuntimeException {
     public enum FailureKind {
         CONFIGURATION,
         ACCESS_DENIED,
+        QUOTA_EXCEEDED,
         INVALID_REQUEST,
         RATE_LIMITED,
         REMOTE_FAILURE,

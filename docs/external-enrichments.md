@@ -139,7 +139,7 @@ batches. Existing factors are retained and deduplicated.
 
 ## OSM Attributes — Ohsome API
 
-**Source:** `https://api.heigit.org/ohsome-api-staging/v2/extraction/features.parquet`
+**Source:** `https://api.heigit.org/ohsome-api/v2-rc/extraction/features.parquet`
 
 The backend downloads historical GeoParquet snapshots on demand for local tile/month groups. Segments are assigned
 by their geometric midpoint (`ST_LineInterpolatePoint(geometry, 0.5)`) to a 0.1° grid with origin (0, 0), using
@@ -173,6 +173,22 @@ All events for the selected segment/month pair receive the same result in one da
 
 A transient download or snapshot-read failure releases the claim to `PENDING` and stops the current drain for a later retry. Authentication failures also stop the drain. A permanently rejected request marks only that claim `ERROR` and allows other groups to proceed. Logs identify tile, bbox, month, cache hit/download, and match counts.
 
+The [HeiGIT Standard extraction plan](https://account.heigit.org/info/plans) allows 250 requests per
+24-hour renewal period and 15 per minute; the Collaborative plan lists 2,000 per period and 15 per minute.
+The default client spaces attempts by 60 seconds and enforces a conservative rolling 24-hour budget of 250.
+Every outbound attempt, including retries and failed requests, consumes this local budget; cached files do not.
+The per-backend budget cannot account for other applications sharing the key or requests made before it was installed.
+
+HTTP 403/429 with `Quota exceeded` produces `QUOTA_EXCEEDED`, not `ACCESS_DENIED` or event `ERROR`.
+The current claim returns to `PENDING`. Retry uses a positive `Retry-After` (seconds or HTTP date),
+otherwise 24 hours after the failure; the local rolling budget must also have room.
+This is not an assumption that the provider resets at midnight. Scheduled drains are skipped while paused,
+and resume on the first scheduled tick after the deadline, without restarting the backend.
+`request-budget.json` under `ohsome.v2.cache-path` stores attempt timestamps and the pause deadline,
+so recreating the container does not reset the allowance.
+
+See the [migration guide](https://docs.ohsome.org/ohsome-api/v2-rc/migration_guide.html).
+
 The selected OSM way ID and match score are intentionally not added to the database schema. Reproducibility comes from the immutable snapshot manifest and deterministic matching rules; per-event match auditing would require a separate schema extension.
 
 **OSM attributes stored for each matched event:**
@@ -197,13 +213,14 @@ Note: `maxspeed` is **not** fetched or stored despite earlier versions of this d
 | `pipeline.enrichment.ohsome.enabled` | `false` |
 | `pipeline.enrichment.ohsome.batch-size` | `5000` segment/month pairs |
 | `pipeline.enrichment.ohsome.delay-ms` | `60000` |
-| `ohsome.v2.base-url` | `https://api.heigit.org/ohsome-api-staging/v2` |
+| `ohsome.v2.base-url` | `https://api.heigit.org/ohsome-api/v2-rc` |
 | `ohsome.v2.api-key` | `${HEIGIT_API_KEY:}` |
 | `ohsome.v2.cache-path` | `./data/ohsome/v2/tiles-v1` |
 | `ohsome.v2.grid-size-degrees` | `0.1` |
 | `ohsome.v2.buffer-degrees` | `0.01` |
 | `ohsome.v2.filter` / `clip` | `type:way and highway=*` / `false` |
 | `ohsome.v2.download-interval` | `PT60S` |
+| `ohsome.v2.max-requests-per-day` | `250` (rolling 24 hours) |
 | `ohsome.v2.max-retries` | `3` |
 
 ---

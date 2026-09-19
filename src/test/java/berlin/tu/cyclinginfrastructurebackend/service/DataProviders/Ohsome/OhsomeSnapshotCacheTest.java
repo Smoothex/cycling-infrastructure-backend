@@ -266,7 +266,123 @@ class OhsomeSnapshotCacheTest {
         assertThat(first.path().resolveSibling("2019-01.parquet.invalid")).isRegularFile();
     }
 
+    @Test
+    void quotaDenialPausesWithoutRetryingAndAutomaticallyResumes() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> {
+            if (requests.incrementAndGet() == 1) {
+                exchange.getResponseHeaders().add("Retry-After", "3600");
+                respond(exchange, 403, "{\"error\":\"Quota exceeded\"}".getBytes(StandardCharsets.UTF_8));
+            } else {
+                respond(exchange, 200, VALID_SNAPSHOT);
+            }
+        });
+        var properties = baseProperties();
+        properties.setApiKey("secret-test-key");
+        var now = new java.util.concurrent.atomic.AtomicReference<>(TEST_NOW);
+        Clock clock = new Clock() {
+            public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
+            public Clock withZone(java.time.ZoneId zone) { return this; }
+            public Instant instant() { return now.get(); }
+        };
+        var cache = cache(properties, duration -> { throw new AssertionError("Do not sleep for quota"); }, clock);
+        assertThatThrownBy(() -> cache.ensureSnapshot(BERLIN, JANUARY))
+                .isInstanceOf(OhsomeSnapshotCacheException.class)
+                .extracting(exception -> ((OhsomeSnapshotCacheException) exception).failureKind())
+                .isEqualTo(OhsomeSnapshotCacheException.FailureKind.QUOTA_EXCEEDED);
+        assertThat(cache.isQuotaPaused()).isTrue();
+        assertThatThrownBy(() -> cache.ensureSnapshot(HAMBURG, JANUARY)).hasMessageContaining("automatic retry");
+        assertThat(requests).hasValue(1);
+        now.set(TEST_NOW.plusSeconds(3600));
+        assertThat(cache.isQuotaPaused()).isFalse();
+        assertThat(cache.ensureSnapshot(BERLIN, JANUARY).path()).isRegularFile();
+        assertThat(requests).hasValue(2);
+        assertThat(Files.readString(properties.getCachePath().resolve("request-budget.json")))
+                .doesNotContain("secret-test-key");
+    }
+
+    @Test
+    void localBudgetAllowsCachedReadsButPreventsNewRequestsAcrossRestarts() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> { requests.incrementAndGet(); respond(exchange, 200, VALID_SNAPSHOT); });
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        properties.setMaxRequestsPerDay(1);
+        var cache = cache(properties, duration -> { });
+        var snapshot = cache.ensureSnapshot(BERLIN, JANUARY);
+        var restarted = cache(properties, duration -> { });
+        assertThat(restarted.ensureSnapshot(BERLIN, JANUARY)).isEqualTo(snapshot);
+        assertThatThrownBy(() -> restarted.ensureSnapshot(BERLIN, FEBRUARY)).hasMessageContaining("automatic retry");
+        assertThat(requests).hasValue(1);
+        var tomorrow = cache(properties, duration -> { }, Clock.fixed(TEST_NOW.plus(Duration.ofDays(1)), ZoneOffset.UTC));
+        assertThat(tomorrow.ensureSnapshot(BERLIN, FEBRUARY).path()).isRegularFile();
+        assertThat(requests).hasValue(2);
+    }
+
+    @Test
+    void retriesConsumeBudgetAndRespectRequestSpacing() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> respond(exchange, requests.incrementAndGet() == 1 ? 503 : 200, VALID_SNAPSHOT));
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        properties.setMaxRequestsPerDay(2);
+        properties.setDownloadInterval(Duration.ofSeconds(60));
+        var waits = new ArrayList<Duration>();
+        cache(properties, waits::add).ensureSnapshot(BERLIN, JANUARY);
+        assertThat(waits).containsExactly(Duration.ofSeconds(60));
+        assertThat(cache(properties, waits::add).isQuotaPaused()).isTrue();
+        assertThat(requests).hasValue(2);
+    }
+
+    @Test
+    void requestSpacingPersistsAcrossRestarts() throws Exception {
+        startServer(exchange -> respond(exchange, 200, VALID_SNAPSHOT));
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        properties.setDownloadInterval(Duration.ofSeconds(60));
+        cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
+        var waits = new ArrayList<Duration>();
+        cache(properties, waits::add, Clock.fixed(TEST_NOW.plusSeconds(10), ZoneOffset.UTC))
+                .ensureSnapshot(BERLIN, FEBRUARY);
+        assertThat(waits).containsExactly(Duration.ofSeconds(50));
+    }
+
+    @Test
+    void quota429WithoutRetryAfterPersistsUntilNextDay() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        startServer(exchange -> {
+            requests.incrementAndGet();
+            respond(exchange, 429, "{\"error\":\"Quota exceeded\"}".getBytes(StandardCharsets.UTF_8));
+        });
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
+                .hasMessageContaining(TEST_NOW.plus(Duration.ofDays(1)).toString());
+        var restarted = cache(properties, duration -> { });
+        assertThat(restarted.isQuotaPaused()).isTrue();
+        assertThatThrownBy(() -> restarted.ensureSnapshot(BERLIN, JANUARY)).hasMessageContaining("automatic retry");
+        assertThat(requests).hasValue(1);
+    }
+
+    @Test
+    void changingEndpointKeepsValidatedSnapshotsUsable() throws Exception {
+        startServer(exchange -> respond(exchange, 200, VALID_SNAPSHOT));
+        var properties = baseProperties();
+        properties.setApiKey("test-key");
+        var snapshot = cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY);
+        server.stop(0);
+        server = null;
+        properties.setBaseUrl(URI.create("https://api.heigit.org/ohsome-api/v2-rc"));
+        properties.setApiKey("");
+        assertThat(cache(properties, duration -> { throw new AssertionError("No network needed"); })
+                .ensureSnapshot(BERLIN, JANUARY)).isEqualTo(snapshot);
+    }
+
     private OhsomeSnapshotCache cache(OhsomeV2Properties properties, OhsomeSnapshotCache.Delay delay) {
+        return cache(properties, delay, Clock.fixed(TEST_NOW, ZoneOffset.UTC));
+    }
+
+    private OhsomeSnapshotCache cache(OhsomeV2Properties properties, OhsomeSnapshotCache.Delay delay, Clock clock) {
         OhsomeSnapshotValidator validator = path -> {
             if (!java.util.Arrays.equals(Files.readAllBytes(path), VALID_SNAPSHOT)) {
                 throw new IOException("not the expected test snapshot");
@@ -278,7 +394,7 @@ class OhsomeSnapshotCacheTest {
                 validator,
                 new ObjectMapper(),
                 HttpClient.newHttpClient(),
-                Clock.fixed(TEST_NOW, ZoneOffset.UTC),
+                clock,
                 delay
         );
     }

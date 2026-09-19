@@ -57,9 +57,9 @@ public class OhsomeSnapshotCache {
     private final HttpClient httpClient;
     private final Clock clock;
     private final Delay delay;
+    private final OhsomeRequestBudget requestBudget;
 
     private volatile OhsomeSnapshotCacheException terminalRemoteFailure;
-    private Instant lastRequestStartedAt;
 
     @Autowired
     public OhsomeSnapshotCache(
@@ -93,6 +93,11 @@ public class OhsomeSnapshotCache {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.delay = Objects.requireNonNull(delay, "delay");
+        this.requestBudget = new OhsomeRequestBudget(properties, clock, objectMapper);
+    }
+
+    public boolean isQuotaPaused() {
+        return requestBudget.resumeAt().isPresent();
     }
 
     /** Only the requested tile/month is acquired; other months remain untouched. */
@@ -120,6 +125,7 @@ public class OhsomeSnapshotCache {
         if (terminalRemoteFailure != null) {
             throw terminalRemoteFailure;
         }
+        requestBudget.resumeAt().ifPresent(at -> { throw OhsomeRequestBudget.paused(at); });
         if (Files.exists(target)) {
             moveInvalidSnapshot(target);
         }
@@ -181,9 +187,11 @@ public class OhsomeSnapshotCache {
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             waitForRequestSlot();
             HttpRequest request = buildRequest(month, bbox);
+            requestBudget.reserve();
+            requestBudget.resumeAt().ifPresent(at ->
+                    log.warn("Ohsome local request budget reached; further downloads resume at {}", at));
             HttpResponse<Path> response;
             try {
-                lastRequestStartedAt = clock.instant();
                 response = httpClient.send(
                         request,
                         HttpResponse.BodyHandlers.ofFile(
@@ -235,9 +243,15 @@ public class OhsomeSnapshotCache {
             int status = response.statusCode();
             String responseExcerpt = responseExcerpt(partial);
             deleteIfExists(partial);
+            if ((status == 403 || status == 429)
+                    && responseExcerpt.toLowerCase(java.util.Locale.ROOT).contains("quota exceeded")) {
+                Instant resumeAt = requestBudget.quotaExceeded(parseRetryAfter(response));
+                log.warn("Ohsome API quota exceeded (HTTP {}); automatic retry at {}", status, resumeAt);
+                throw OhsomeRequestBudget.paused(resumeAt);
+            }
             if (status == 401 || status == 403) {
                 terminalRemoteFailure = new OhsomeSnapshotCacheException(ACCESS_DENIED,
-                        "Ohsome v2 rejected the API key with HTTP " + status + responseExcerpt);
+                        "Ohsome v2 denied access with HTTP " + status + responseExcerpt);
                 throw terminalRemoteFailure;
             }
             if (status >= 400 && status < 500 && status != 429 && status != 408) {
@@ -282,6 +296,7 @@ public class OhsomeSnapshotCache {
     }
 
     private void waitForRequestSlot() {
+        Instant lastRequestStartedAt = requestBudget.lastRequestAt().orElse(null);
         if (lastRequestStartedAt == null || properties.getDownloadInterval().isZero()) {
             return;
         }
