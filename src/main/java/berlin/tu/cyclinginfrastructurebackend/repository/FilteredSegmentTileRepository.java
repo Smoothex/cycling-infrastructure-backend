@@ -47,21 +47,6 @@ public class FilteredSegmentTileRepository {
                         """;
             });
         }
-        // Overview tiles retain one representative per 8-screen-pixel cell. The grid is
-        // global (not tile-relative), and filtering happens before choosing representatives.
-        // At z13+ retain every matching segment, as in the PMTiles detail layer.
-        boolean overview = z < 13;
-        params.addValue("cellSize", 40075016.68557849 / (1 << z) / 64);
-        String midpoint = overview
-                ? ", ST_Transform(ST_LineInterpolatePoint(s.geometry, 0.5), 3857) AS midpoint" : "";
-        String ranked = overview ? """
-                , ranked AS (
-                    SELECT *, ROW_NUMBER() OVER (
-                        PARTITION BY FLOOR(ST_X(midpoint) / :cellSize), FLOOR(ST_Y(midpoint) / :cellSize)
-                        ORDER BY event_count DESC, id
-                    ) AS density_rank FROM candidates
-                )
-                """ : "";
         // Keep the spatial index expression in 4326; transform only tile candidates.
         String sql = """
                 WITH bounds AS (
@@ -71,21 +56,20 @@ public class FilteredSegmentTileRepository {
                     SELECT s.id, s.avoidance_count, s.preference_count,
                            s.avoidance_count + s.preference_count AS event_count,
                            %s AS balance,
-                           ST_AsMVTGeom(ST_Transform(s.geometry, 3857), b.tile, 4096, 64, true) AS geom %s
+                           ST_AsMVTGeom(ST_Transform(s.geometry, 3857), b.tile, 4096, 64, true) AS geom
                     FROM street_segments s CROSS JOIN bounds b
                     WHERE s.geometry && b.search
                       AND ST_Intersects(s.geometry, b.search)
                       AND s.usage_count + s.avoidance_count >= 1
                       AND EXISTS (SELECT 1 FROM segment_events e WHERE %s)
-                ) %s, features AS (
+                ), features AS (
                     SELECT id, avoidance_count AS "avoidanceCount", preference_count AS "preferenceCount",
                            event_count AS "eventCount", %s AS bucket, geom
-                    FROM %s WHERE geom IS NOT NULL %s
+                    FROM candidates WHERE geom IS NOT NULL
                 )
                 SELECT ST_AsMVT(features, 'segments', 4096, 'geom') FROM features
                 """.formatted(TileExportRepository.balanceExpression("s.avoidance_count", "s.preference_count"),
-                midpoint, eventPredicate, ranked, TileExportRepository.bucketCase("event_count", "balance"),
-                overview ? "ranked" : "candidates", overview ? "AND density_rank = 1" : "");
+                eventPredicate, TileExportRepository.bucketCase("event_count", "balance"));
         byte[] result = jdbc.queryForObject(sql, params, byte[].class);
         return result == null ? new byte[0] : result;
     }

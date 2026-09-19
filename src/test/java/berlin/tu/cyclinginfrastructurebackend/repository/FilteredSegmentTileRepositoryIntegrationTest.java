@@ -75,7 +75,7 @@ class FilteredSegmentTileRepositoryIntegrationTest {
     }
 
     @Test
-    void thinsOverviewAfterFilteringAndPreservesEveryDetailSegment() {
+    void preservesEveryMatchingSegmentAtOverviewAndDetailZooms() {
         jdbc.execute("""
                 INSERT INTO street_segments
                 SELECT id, ST_GeomFromText('LINESTRING(13.412 52.507,13.414 52.508)',4326), 1,0,1
@@ -83,26 +83,15 @@ class FilteredSegmentTileRepositoryIntegrationTest {
                 """);
         jdbc.execute("INSERT INTO segment_events SELECT id,150,'COMMUTE','UNKNOWN',true,true,false,'NO_DATA' FROM street_segments");
         var filter = new SegmentTileFilter(0,Long.MAX_VALUE,null,null,Set.of(SegmentEnrichmentFilter.OHSOME_ENRICHED));
-        assertThat(features(repository.tile(14,8802,5374,filter))).hasSize(10001);
-        assertThat(features(repository.tile(13,4401,2687,filter))).hasSize(10001);
-        jdbc.execute("UPDATE street_segments SET preference_count=20 WHERE id=10001");
-        var overview = features(repository.tile(10,550,335,filter));
-        assertThat(overview).singleElement().satisfies(feature -> assertThat(feature.get("id")).isEqualTo(10001L));
-        assertThat(features(repository.tile(12,2200,1343,filter))).hasSize(1);
-        // An ineligible high-count segment must not hide eligible lower-count neighbors.
+        // Dense neighboring segments must not disappear when zooming out.
+        for (int z : new int[]{10, 12, 13, 14}) {
+            int shift = 14 - z;
+            assertThat(features(repository.tile(z,8802 >> shift,5374 >> shift,filter))).hasSize(10001);
+        }
         jdbc.execute("UPDATE segment_events SET ohsome_enriched=false WHERE segment_id=10001");
-        assertThat(features(repository.tile(10,550,335,filter))).singleElement()
-                .satisfies(feature -> assertThat(feature.get("id")).isEqualTo(1L));
-        jdbc.execute("""
-                UPDATE street_segments SET geometry = ST_Transform(ST_Translate(
-                    ST_GeomFromText('LINESTRING(0 0,20 20)',3857),
-                    ST_XMin(ST_TileEnvelope(12,2200,1343)) + 100 + (id % 100) * 50,
-                    ST_YMin(ST_TileEnvelope(12,2200,1343)) + 100 + (id / 100) * 50),4326)
-                """);
-        int wideCount = features(repository.tile(10,550,335,filter)).size();
-        int closerCount = features(repository.tile(12,2200,1343,filter)).size();
-        assertThat(wideCount).isPositive();
-        assertThat(closerCount).isGreaterThan(wideCount).isLessThan(10000);
+        var overview = features(repository.tile(10,550,335,filter));
+        assertThat(overview).hasSize(10000);
+        assertThat(overview).noneMatch(feature -> feature.get("id").equals(10001L));
     }
 
     // Minimal MVT protobuf reader: assert the actual emitted feature properties without adding a runtime dependency.
