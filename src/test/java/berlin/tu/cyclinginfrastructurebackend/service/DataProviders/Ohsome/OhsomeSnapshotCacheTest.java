@@ -348,7 +348,7 @@ class OhsomeSnapshotCacheTest {
     }
 
     @Test
-    void quota429WithoutRetryAfterPersistsUntilNextDay() throws Exception {
+    void quota429WithoutRetryAfterPersistsForEightHours() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         startServer(exchange -> {
             requests.incrementAndGet();
@@ -357,11 +357,14 @@ class OhsomeSnapshotCacheTest {
         var properties = baseProperties();
         properties.setApiKey("test-key");
         assertThatThrownBy(() -> cache(properties, duration -> { }).ensureSnapshot(BERLIN, JANUARY))
-                .hasMessageContaining(TEST_NOW.plus(Duration.ofDays(1)).toString());
+                .hasMessageContaining(TEST_NOW.plus(Duration.ofHours(8)).toString());
         var restarted = cache(properties, duration -> { });
         assertThat(restarted.isQuotaPaused()).isTrue();
         assertThatThrownBy(() -> restarted.ensureSnapshot(BERLIN, JANUARY)).hasMessageContaining("automatic retry");
         assertThat(requests).hasValue(1);
+        var afterPause = cache(properties, duration -> { },
+                Clock.fixed(TEST_NOW.plus(Duration.ofHours(8)), ZoneOffset.UTC));
+        assertThat(afterPause.isQuotaPaused()).isFalse();
     }
 
     @Test

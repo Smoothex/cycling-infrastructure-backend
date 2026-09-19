@@ -35,12 +35,29 @@ class OhsomeRequestBudgetTest {
     }
 
     @Test
-    void quotaWithoutResetHeaderPersistsTwentyFourHourPause() {
+    void quotaWithoutResetHeaderPersistsEightHourPause() {
         var budget = budget(NOW, 250);
         budget.reserve();
-        assertThat(budget.quotaExceeded(Optional.empty())).isEqualTo(NOW.plus(Duration.ofHours(24)));
-        assertThat(budget(NOW.plusSeconds(60), 250).resumeAt()).isPresent();
-        assertThat(budget(NOW.plus(Duration.ofHours(24)), 250).resumeAt()).isEmpty();
+        assertThat(budget.quotaExceeded(Optional.empty())).isEqualTo(NOW.plus(Duration.ofHours(8)));
+        assertThat(budget(NOW.plusSeconds(60), 250).resumeAt())
+                .contains(NOW.plus(Duration.ofHours(8)));
+        assertThat(budget(NOW.plus(Duration.ofHours(8)).minusMillis(1), 250).resumeAt()).isPresent();
+        assertThat(budget(NOW.plus(Duration.ofHours(8)), 250).resumeAt()).isEmpty();
+    }
+
+    @Test
+    void providerResetHintTakesPrecedenceOverEightHourFallback() {
+        var budget = budget(NOW, 250);
+        assertThat(budget.quotaExceeded(Optional.of(Duration.ofHours(7))))
+                .isEqualTo(NOW.plus(Duration.ofHours(7)));
+    }
+
+    @Test
+    void repeatedQuotaRejectionStartsAnotherEightHourPause() {
+        budget(NOW, 250).quotaExceeded(Optional.empty());
+        var resumed = budget(NOW.plus(Duration.ofHours(8)), 250);
+        assertThat(resumed.quotaExceeded(Optional.empty()))
+                .isEqualTo(NOW.plus(Duration.ofHours(16)));
     }
 
     @Test

@@ -20,6 +20,7 @@ import static berlin.tu.cyclinginfrastructurebackend.service.DataProviders.Ohsom
 /** Persistent, single-backend request budget. Cache reads do not consume requests. */
 final class OhsomeRequestBudget {
     private static final Duration WINDOW = Duration.ofHours(24);
+    private static final Duration QUOTA_RETRY_DELAY = Duration.ofHours(8);
     private final OhsomeV2Properties properties;
     private final Clock clock;
     private final ObjectMapper mapper;
@@ -59,8 +60,8 @@ final class OhsomeRequestBudget {
 
     synchronized Instant quotaExceeded(Optional<Duration> retryAfter) {
         load();
-        // Provider renewal is not necessarily midnight. Without a reset hint, wait 24 hours.
-        Duration wait = retryAfter.filter(Duration::isPositive).orElse(WINDOW);
+        // Without a provider reset hint, probe again after eight hours.
+        Duration wait = retryAfter.filter(Duration::isPositive).orElse(QUOTA_RETRY_DELAY);
         state = new State(state.requests(), clock.instant().plus(wait).toEpochMilli());
         save();
         return resumeAt().orElseThrow();
