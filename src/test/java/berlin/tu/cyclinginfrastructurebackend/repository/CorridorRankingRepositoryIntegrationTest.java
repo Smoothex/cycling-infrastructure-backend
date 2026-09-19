@@ -51,7 +51,10 @@ class CorridorRankingRepositoryIntegrationTest {
         jdbc.execute("""
                 CREATE TABLE segment_events (
                     id uuid PRIMARY KEY, segment_id bigint, ride_id uuid,
-                    event_type text, event_timestamp bigint, ride_intent text)
+                    event_type text, event_timestamp bigint, ride_intent text,
+                    ohsome_enriched boolean DEFAULT false,
+                    weather_enriched boolean DEFAULT false,
+                    traffic_enrichment_status text)
                 """);
         jdbc.execute("""
                 CREATE TABLE incidents (
@@ -162,7 +165,10 @@ class CorridorRankingRepositoryIntegrationTest {
 
     private void event(long segment, long ride, String type, long timestamp) {
         jdbc.update("INSERT INTO rides VALUES (?, 'COMMUTE') ON CONFLICT DO NOTHING", new UUID(0, ride));
-        jdbc.update("INSERT INTO segment_events VALUES (?, ?, ?, ?, ?, 'COMMUTE')",
+        jdbc.update("""
+                INSERT INTO segment_events (id, segment_id, ride_id, event_type, event_timestamp, ride_intent)
+                VALUES (?, ?, ?, ?, ?, 'COMMUTE')
+                """,
                 UUID.randomUUID(), segment, new UUID(0, ride), type, timestamp);
     }
 

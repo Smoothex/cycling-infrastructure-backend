@@ -3,8 +3,8 @@ name: cycling-infrastructure
 services:
   postgres:
     image: postgis/postgis:17-3.4
-    mem_limit: 1g
-    cpus: 0.5
+    mem_limit: 1536m
+    cpus: 1.0
     shm_size: 256m
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
@@ -54,15 +54,17 @@ services:
 
   backend:
     build: .
-    mem_limit: 6g
+    mem_limit: 6656m
     cpus: 1.5
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cyclingdb
       SPRING_DATASOURCE_USERNAME: user
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:4200,http://localhost:25080,http://localhost:18080}
+      APP_CORS_ALLOWED_ORIGINS: ${APP_CORS_ALLOWED_ORIGINS:-http://localhost:4200,http://localhost:25080,http://localhost:18080,http://localhost:4202,https://simra.3s-rg.de}
       SIMRA_DATA_PATH: /app/data/SimRa
       TILES_DIRECTORY: ${TILES_DIRECTORY:-/app/data/tiles}
+      TIPPECANOE_MAX_THREADS: "1"
+      SPRING_APPLICATION_JSON: '{"tiles":{"auto-rebuild":{"enabled":false}}}'
       PIPELINE_ENABLED: ${PIPELINE_ENABLED:-true}
       PIPELINE_IMPORT_ENABLED: ${PIPELINE_IMPORT_ENABLED:-true}
       PIPELINE_ENRICHMENT_ENABLED: ${PIPELINE_ENRICHMENT_ENABLED:-false}

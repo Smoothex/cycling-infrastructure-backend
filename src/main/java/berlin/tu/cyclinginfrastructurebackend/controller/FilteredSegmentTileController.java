@@ -10,7 +10,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.util.DigestUtils;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 
@@ -35,7 +37,13 @@ public class FilteredSegmentTileController {
         }
         var filter = new SegmentTileFilter(from == null ? 0 : from, to == null ? Long.MAX_VALUE : to,
                 rideIntent, trafficCondition, enrichmentFilters == null ? Set.of() : Set.copyOf(enrichmentFilters));
-        // Revalidate in the server cache so pipeline invalidation is visible without browser cache expiry.
-        return ResponseEntity.ok().cacheControl(CacheControl.noCache()).body(service.tile(z, x, y, filter));
+        byte[] tile = service.tile(z, x, y, filter);
+        // Reuse tiles across source replacements.
+        // subsequent requests revalidate against the pipeline-versioned server cache.
+        // Hash the bytes rather than an in-memory version that resets on restart.
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(Duration.ofSeconds(30)).cachePrivate())
+                .eTag(DigestUtils.md5DigestAsHex(tile))
+                .body(tile);
     }
 }
