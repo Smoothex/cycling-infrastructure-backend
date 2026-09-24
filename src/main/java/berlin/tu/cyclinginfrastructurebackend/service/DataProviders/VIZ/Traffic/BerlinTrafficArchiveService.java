@@ -43,13 +43,15 @@ public class BerlinTrafficArchiveService {
 
     private final RestClient restClient;
     private final Path cacheDir;
-    private final Map<Path, Map<String, TrafficMeasurement>> parsedFileCache = new ConcurrentHashMap<>();
+    private final TrafficMeasurementCache parsedFileCache;
     private final Set<Path> failedExtractionArchives = ConcurrentHashMap.newKeySet();
 
     public BerlinTrafficArchiveService(RestClient.Builder restClientBuilder,
-                                       @Value("${enrichment.traffic.cache-dir:./data/berlinTraffic/cache}") String cacheDir) {
+                                       @Value("${enrichment.traffic.cache-dir:./data/berlinTraffic/cache}") String cacheDir,
+                                       @Value("${enrichment.traffic.parsed-cache-max-mb:256}") long parsedCacheMaxMb) {
         this.restClient = restClientBuilder.build();
         this.cacheDir = Path.of(cacheDir);
+        this.parsedFileCache = new TrafficMeasurementCache(Math.multiplyExact(parsedCacheMaxMb, 1024L * 1024));
     }
 
     TrafficLookupResult findNewDetectorMeasurement(YearMonth month, String detectorName, LocalDate date, int hour) {
@@ -68,7 +70,7 @@ public class BerlinTrafficArchiveService {
         }
 
         try {
-            Map<String, TrafficMeasurement> rows = parsedFileCache.computeIfAbsent(
+            Map<String, TrafficMeasurement> rows = parsedFileCache.get(
                     detectorFile.get(),
                     path -> readNewDetectorRows(path, TrafficSourceType.NEW_DETECTOR)
             );
@@ -92,7 +94,7 @@ public class BerlinTrafficArchiveService {
             return TrafficLookupResult.sourceMissing();
         }
 
-        Map<String, TrafficMeasurement> rows = parsedFileCache.computeIfAbsent(
+        Map<String, TrafficMeasurement> rows = parsedFileCache.get(
                 source.get(),
                 path -> readOldDetectorRows(path, TrafficSourceType.OLD_DETECTOR)
         );
@@ -112,7 +114,7 @@ public class BerlinTrafficArchiveService {
             return TrafficLookupResult.sourceMissing();
         }
 
-        Map<String, TrafficMeasurement> rows = parsedFileCache.computeIfAbsent(
+        Map<String, TrafficMeasurement> rows = parsedFileCache.get(
                 source.get(),
                 path -> readOldMqRows(path, TrafficSourceType.OLD_MQ)
         );
