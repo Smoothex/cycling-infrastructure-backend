@@ -23,11 +23,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Clock;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 @Component
@@ -42,8 +43,9 @@ public class SimRaDataLoader {
     private final RideFinalizationService rideFinalizationService;
     private final PipelineActivityTracker pipelineActivityTracker;
     private final TileBuildService tileBuildService;
-    private final Set<String> attemptedFilesThisRun = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean importComplete = new AtomicBoolean(false);
+    private final Map<String, Long> retryAfterByFilename = new ConcurrentHashMap<>();
+    private Clock clock = Clock.systemUTC();
+    private long nextScanAtMillis;
     private volatile ImportMetrics importMetrics;
 
     @Value("${simra.data.path:./data/SimRa}")
@@ -60,6 +62,12 @@ public class SimRaDataLoader {
 
     @Value("${pipeline.import.thread-pool-size:4}")
     private int importThreadPoolSize;
+
+    @Value("${pipeline.import.rescan-delay-ms:60000}")
+    private long rescanDelayMs = 60_000;
+
+    @Value("${pipeline.import.retry-delay-ms:3600000}")
+    private long retryDelayMs = 3_600_000;
 
     public SimRaDataLoader(RideRepository rideRepository,
                            SimRaFileParser parser,
@@ -79,7 +87,7 @@ public class SimRaDataLoader {
 
     @Scheduled(fixedDelayString = "${pipeline.import.delay-ms:30000}")
     public void importNextBatch() {
-        if (!pipelineEnabled || !isImportEnabled || importComplete.get()) {
+        if (!pipelineEnabled || !isImportEnabled || clock.millis() < nextScanAtMillis) {
             return;
         }
 
@@ -89,9 +97,12 @@ public class SimRaDataLoader {
             log.warn("Data path does not exist: {}", dataPath);
             return;
         }
-        ImportMetrics metrics = importMetrics();
-
         Set<String> existingFiles = rideRepository.findAllOriginalFilenames();
+        long now = clock.millis();
+        // Successful imports are deduplicated by the database; expire retry state so it
+        // does not accumulate filenames indefinitely in a continuously running backend.
+        retryAfterByFilename.entrySet().removeIf(entry ->
+                existingFiles.contains(entry.getKey()) || entry.getValue() <= now);
 
         List<Path> filesToProcess;
         int batchLimit = Math.max(1, importBatchSize);
@@ -103,7 +114,7 @@ public class SimRaDataLoader {
                     .filter(path -> path.toString().contains("Rides"))
                     .filter(path -> path.getFileName().toString().startsWith("VM"))
                     .filter(path -> !existingFiles.contains(path.getFileName().toString()))
-                    .filter(path -> !attemptedFilesThisRun.contains(path.getFileName().toString()))
+                    .filter(path -> !retryAfterByFilename.containsKey(path.getFileName().toString()))
                     .limit(batchLimit)
                     .toList();
         } catch (IOException e) {
@@ -116,6 +127,7 @@ public class SimRaDataLoader {
             return;
         }
         boolean sourceScanExhausted = filesToProcess.size() < batchLimit;
+        ImportMetrics metrics = importMetrics();
 
         try (PipelineActivityTracker.Activity ignored = pipelineActivityTracker.beginWork()) {
             log.info("Starting SimRa import batch with {} files from {}.", filesToProcess.size(), dataPath);
@@ -137,7 +149,8 @@ public class SimRaDataLoader {
                                 metrics.recordFileFailed();
                                 log.error("Failed to process file: {}", path.getFileName(), e);
                             } finally {
-                                attemptedFilesThisRun.add(path.getFileName().toString());
+                                retryAfterByFilename.put(path.getFileName().toString(),
+                                        clock.millis() + Math.max(1, retryDelayMs));
                             }
                         })
                 ).get();
@@ -243,15 +256,18 @@ public class SimRaDataLoader {
     }
 
     private void completeImportRun() {
-        if (!importComplete.compareAndSet(false, true)) {
+        nextScanAtMillis = clock.millis() + Math.max(1, rescanDelayMs);
+        if (importMetrics == null) {
             return;
         }
-        ImportMetrics metrics = importMetrics();
+        ImportMetrics metrics = importMetrics;
+        importMetrics = null;
         metrics.finish();
-        log.info("No unattempted SimRa ride files remain. Scheduled import scanning is now stopped until restart.");
+        log.info("No eligible SimRa ride files remain. Import scanning will resume in {} ms.", rescanDelayMs);
         metrics.printFinalSummary();
         if (metrics.hasFailures()) {
-            log.warn("Some files failed during this run. Restart the backend to make those source files eligible for retry.");
+            log.warn("Some files failed during this run. Uncommitted source files become eligible for retry "
+                    + "{} ms after their last attempt.", retryDelayMs);
         }
     }
 

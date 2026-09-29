@@ -32,7 +32,9 @@ docker compose up -d
 ```
 
 If using another cache folder instead of `./data`, you can set its value in the `.env` as `APP_DATA_PATH`.
-Importing is enabled by default. After an import completes, `docker compose restart backend` discovers newly added files.
+Importing is enabled by default. After available files are processed, the backend rescans every 60 seconds for new files. Uncommitted files (including invalid or failed files) become eligible for retry after one hour; committed filenames are excluded using the database. See [File discovery](docs/data-import.md#step-1--file-discovery) for the timing settings.
+
+The backend and PostgreSQL use `restart: unless-stopped`. The JVM exits on a Java out-of-memory error so Docker can restart it; this does not prevent memory exhaustion on the VM.
 
 ### Environment variables and pipeline switches
 
@@ -153,8 +155,7 @@ matching then runs locally for each distinct street-segment/month pair. See
 ### Other German cities
 
 Rides from other German cities can be imported into the same database by placing files in the existing SimRa format and 
-folder structure under `simra.data.path`. Filenames must be unique across regional datasets; enable import and restart 
-the backend to pick up new files. Route comparison, ohsome, and weather enrichment use the ride or segment coordinates 
+folder structure under `simra.data.path`. Filenames must be unique across regional datasets; with import enabled, periodic scans pick up new files automatically. Route comparison, ohsome, and weather enrichment use the ride or segment coordinates
 and require no city registration. VIZ traffic and road-disruption sources remain Berlin-only.
 
 ### Key config properties

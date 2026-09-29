@@ -4,7 +4,7 @@
 
 The only data source currently imported is **SimRa** — a community cycling safety app that records GPS trajectories and safety incidents. Raw ride files are picked up from a local directory, parsed, validated, map-matched to the road network, and stored in the database.
 
-Import runs in bounded batches during one backend run. It keeps scheduling batches until the source scan is exhausted, then stops scanning until the backend is restarted.
+Import runs continuously in bounded batches. Once no eligible files remain, scanning pauses briefly and then resumes to discover new files without restarting the backend.
 
 For `.env` setup, startup commands, cache paths, networking, and throughput settings,
 see [Running the backend](../README.md#running-the-backend).
@@ -48,11 +48,15 @@ The loader scans the SimRa data path recursively for files that:
 - Are in a `Rides/` directory
 - Have filenames starting with `VM`
 - Have not already been imported (checked against `rides.original_filename`)
-- Have not been attempted in the current run (in-memory dedup to avoid retrying known-bad files)
+- Are not in the retry cooldown following a recent attempt
 
 Up to `pipeline.import.batch-size` (configured default: 20) files are processed per cycle.
 
-If a scan returns fewer files than the batch limit, the source tree was exhausted and the importer stops immediately after that final batch completes. If a scan returns exactly the limit, another scan determines whether another batch remains. Once complete, later scheduled callbacks return without querying the database or walking the source volume. A backend restart starts a new import run, allowing newly added files and previously failed files to be considered again.
+If a scan returns fewer files than the batch limit, the importer waits for `pipeline.import.rescan-delay-ms` (default: 60000) after that batch before scanning again. If a scan returns exactly the limit, scanning continues at `pipeline.import.delay-ms` (default: 2000) until no eligible files remain. During the idle delay, scheduled callbacks do not query the database or walk the source volume. Scans resume on the first scheduled callback at or after the deadline.
+
+Uncommitted files, including invalid formats, validation rejections, and processing failures, become eligible again `pipeline.import.retry-delay-ms` (default: 3600000, one hour) after their last attempt completes. New filenames are eligible at the next scan even while other files are cooling down. Committed filenames remain excluded by the database after the cooldown and across restarts. Retry deadlines are held in memory and are cleared on restart; expired entries and entries for committed files are removed at subsequent scans. Both delay settings have a minimum effective value of 1 ms.
+
+Copy incoming files to a temporary name that does not start with `VM`, then rename them to their final name once the copy is complete to avoid importing partially written files.
 
 ### Step 2 — Parsing
 
@@ -92,9 +96,9 @@ Before map matching, two checks run:
 6. Shortest-path and detour analysis runs immediately using the same canonical trace
 7. A final transaction flushes the finalized `Ride`, locks the union of usage/avoidance/preference segment IDs in ascending order, applies all counters, and saves segment events
 
-Rides below the configured origin-destination distance are finalized as `SKIPPED` without usage. If shortest-path routing fails after successful map matching, the ride is finalized as `SKIPPED` while retaining prepared usage. If map matching, detour preparation, or final persistence throws, no ride, counter, or event state is committed; an unused zero-count segment reference may remain. The source file is suppressed for the rest of the current backend run and becomes eligible again after restart because its filename was not committed.
+Rides below the configured origin-destination distance are finalized as `SKIPPED` without usage. If shortest-path routing fails after successful map matching, the ride is finalized as `SKIPPED` while retaining prepared usage. If map matching, detour preparation, or final persistence throws, no ride, counter, or event state is committed; an unused zero-count segment reference may remain. The source file becomes eligible again after its retry cooldown because its filename was not committed.
 
-Metrics accumulate across every batch. After the source is exhausted and all inline detour and final-persistence work has completed, one final structured summary reports:
+Metrics accumulate across batches until no eligible files remain. After all inline detour and final-persistence work has completed, a final structured summary reports:
 
 - Source files selected, attempted, rejected, invalid, and failed
 - Committed rides split into `PROCESSED` and `SKIPPED`
@@ -105,7 +109,7 @@ Metrics accumulate across every batch. After the source is exhausted and all inl
 - Total, average, maximum, and sample count for every processing phase
 - End-to-end duration and committed-ride throughput
 
-A file counts as committed only after the final transaction succeeds. If the final summary reports failures, restarting the backend makes those source files eligible for retry.
+A file counts as committed only after the final transaction succeeds. Failed source files are retried automatically after the cooldown. Metrics reset for the next group of eligible files; empty scans do not print repeated summaries.
 
 ### Step 5 — Parallel Execution
 

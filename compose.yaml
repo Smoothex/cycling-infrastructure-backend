@@ -3,6 +3,7 @@ name: cycling-infrastructure
 services:
   postgres:
     image: postgis/postgis:17-3.4
+    restart: unless-stopped
     mem_limit: 1536m
     cpus: 1.0
     shm_size: 256m
@@ -54,6 +55,7 @@ services:
 
   backend:
     build: .
+    restart: unless-stopped
     mem_limit: 6656m
     cpus: 1.5
     environment:
