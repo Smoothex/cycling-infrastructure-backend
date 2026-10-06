@@ -113,16 +113,16 @@ class SimRaDataLoaderTest {
     }
 
     @Test
-    void retriesInvalidFilesOnlyAfterCooldown() throws Exception {
+    void doesNotRetryInvalidFiles() throws Exception {
         Fixture fixture = fixture();
         when(fixture.parser.parse(any(InputStream.class), eq("VM_test.csv")))
                 .thenThrow(new IOException("file is empty"));
-        assertRetryCooldown(fixture);
+        assertNoRetry(fixture);
         verify(fixture.rideFinalizationService, never()).finalizeRide(any(), any(), any());
     }
 
     @Test
-    void importsNewFilesWhileInvalidFilesAreCoolingDown() throws Exception {
+    void importsNewFilesWhileInvalidFilesRemainSkipped() throws Exception {
         Fixture fixture = fixture();
         ReflectionTestUtils.setField(fixture.loader, "importBatchSize", 2);
         when(fixture.parser.parse(any(InputStream.class), eq("VM_test.csv")))
@@ -143,24 +143,64 @@ class SimRaDataLoaderTest {
     }
 
     @Test
-    void retriesValidationRejectionsOnlyAfterCooldown() throws Exception {
+    void doesNotRetryValidationRejections() throws Exception {
         Fixture fixture = fixture();
         when(fixture.parser.parse(any(InputStream.class), eq("VM_test.csv")))
                 .thenReturn(new ParsedRide(fixture.ride, List.of()));
-        assertRetryCooldown(fixture);
+        assertNoRetry(fixture);
         verify(fixture.rideFinalizationService, never()).finalizeRide(any(), any(), any());
     }
 
     @Test
-    void retriesProcessingExceptionsOnlyAfterCooldown() throws Exception {
+    void doesNotRetryProcessingExceptions() throws Exception {
         Fixture fixture = fixture();
         when(fixture.detourAnalysisService.analyzeRide(fixture.ride, fixture.trace))
                 .thenThrow(new IllegalStateException("forced detour failure"));
-        assertRetryCooldown(fixture);
+        assertNoRetry(fixture);
         verify(fixture.rideFinalizationService, never()).finalizeRide(any(), any(), any());
     }
 
-    private void assertRetryCooldown(Fixture fixture) throws Exception {
+    @Test
+    void doesNotRetryUnsuccessfulMapMatching() throws Exception {
+        Fixture fixture = fixture();
+        when(fixture.mapMatchingService.processRide(fixture.ride, fixture.trace))
+                .thenReturn(new RideProcessingResult(false, Map.of(), 10L, 2L, 0L, 0L));
+
+        assertNoRetry(fixture);
+
+        verify(fixture.rideFinalizationService, never()).finalizeRide(any(), any(), any());
+    }
+
+    @Test
+    void freshLoaderCanAttemptPreviouslyFailedFile() throws Exception {
+        Fixture original = fixture();
+        when(original.parser.parse(any(InputStream.class), eq("VM_test.csv")))
+                .thenThrow(new IOException("file is empty"));
+        original.loader.importNextBatch();
+
+        Fixture restarted = fixture();
+        when(restarted.detourAnalysisService.analyzeRide(restarted.ride, restarted.trace))
+                .thenReturn(DetourAnalysisResult.empty());
+        restarted.loader.importNextBatch();
+
+        verify(restarted.rideFinalizationService).finalizeRide(
+                restarted.ride, Map.of(42L, 1), DetourAnalysisResult.empty());
+    }
+
+    @Test
+    void freshLoaderSkipsPreviouslyCommittedFile() throws Exception {
+        Fixture fixture = fixture();
+        when(fixture.rideRepository.findAllOriginalFilenames()).thenReturn(Set.of("VM_test.csv"));
+
+        fixture.loader.importNextBatch();
+        when(fixture.clock.millis()).thenReturn(86_400_000L);
+        fixture.loader.importNextBatch();
+
+        verify(fixture.parser, never()).parse(any(InputStream.class), any());
+        verify(fixture.rideFinalizationService, never()).finalizeRide(any(), any(), any());
+    }
+
+    private void assertNoRetry(Fixture fixture) throws Exception {
         ReflectionTestUtils.setField(fixture.loader, "importBatchSize", 2);
         fixture.loader.importNextBatch();
         when(fixture.clock.millis()).thenReturn(60_000L);
@@ -171,7 +211,9 @@ class SimRaDataLoaderTest {
 
         when(fixture.clock.millis()).thenReturn(3_600_000L);
         fixture.loader.importNextBatch();
-        verify(fixture.parser, times(2)).parse(any(InputStream.class), eq("VM_test.csv"));
+        when(fixture.clock.millis()).thenReturn(86_400_000L);
+        fixture.loader.importNextBatch();
+        verify(fixture.parser, times(1)).parse(any(InputStream.class), eq("VM_test.csv"));
     }
 
     private Fixture fixture() throws Exception {
@@ -223,7 +265,8 @@ class SimRaDataLoaderTest {
                 rideFinalizationService,
                 tileBuildService,
                 parser,
-                clock);
+                clock,
+                mapMatchingService);
     }
 
     private record Fixture(
@@ -235,7 +278,8 @@ class SimRaDataLoaderTest {
             RideFinalizationService rideFinalizationService,
             TileBuildService tileBuildService,
             SimRaFileParser parser,
-            Clock clock
+            Clock clock,
+            MapMatchingService mapMatchingService
     ) {
     }
 }

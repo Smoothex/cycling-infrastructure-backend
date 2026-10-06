@@ -32,7 +32,7 @@ docker compose up -d
 ```
 
 If using another cache folder instead of `./data`, you can set its value in the `.env` as `APP_DATA_PATH`.
-Importing is enabled by default. After available files are processed, the backend rescans every 60 seconds for new files. Uncommitted files (including invalid or failed files) become eligible for retry after one hour; committed filenames are excluded using the database. See [File discovery](docs/data-import.md#step-1--file-discovery) for the timing settings.
+Importing is enabled by default. After available files are processed, the backend rescans every 60 seconds for new files. Unsuccessful files (including invalid or failed files) are attempted once per backend run and skipped until restart; committed filenames are excluded using the database. See [File discovery](docs/data-import.md#step-1--file-discovery) for the timing settings.
 
 The backend and PostgreSQL use `restart: unless-stopped`. The JVM exits on a Java out-of-memory error so Docker can restart it; this does not prevent memory exhaustion on the VM.
 

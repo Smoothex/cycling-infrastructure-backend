@@ -25,7 +25,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Clock;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
@@ -43,7 +42,7 @@ public class SimRaDataLoader {
     private final RideFinalizationService rideFinalizationService;
     private final PipelineActivityTracker pipelineActivityTracker;
     private final TileBuildService tileBuildService;
-    private final Map<String, Long> retryAfterByFilename = new ConcurrentHashMap<>();
+    private final Set<String> attemptedFilesThisRun = ConcurrentHashMap.newKeySet();
     private Clock clock = Clock.systemUTC();
     private long nextScanAtMillis;
     private volatile ImportMetrics importMetrics;
@@ -65,9 +64,6 @@ public class SimRaDataLoader {
 
     @Value("${pipeline.import.rescan-delay-ms:60000}")
     private long rescanDelayMs = 60_000;
-
-    @Value("${pipeline.import.retry-delay-ms:3600000}")
-    private long retryDelayMs = 3_600_000;
 
     public SimRaDataLoader(RideRepository rideRepository,
                            SimRaFileParser parser,
@@ -98,11 +94,8 @@ public class SimRaDataLoader {
             return;
         }
         Set<String> existingFiles = rideRepository.findAllOriginalFilenames();
-        long now = clock.millis();
-        // Successful imports are deduplicated by the database; expire retry state so it
-        // does not accumulate filenames indefinitely in a continuously running backend.
-        retryAfterByFilename.entrySet().removeIf(entry ->
-                existingFiles.contains(entry.getKey()) || entry.getValue() <= now);
+        // The database tracks committed files; retain only uncommitted attempts in memory.
+        attemptedFilesThisRun.removeAll(existingFiles);
 
         List<Path> filesToProcess;
         int batchLimit = Math.max(1, importBatchSize);
@@ -114,7 +107,7 @@ public class SimRaDataLoader {
                     .filter(path -> path.toString().contains("Rides"))
                     .filter(path -> path.getFileName().toString().startsWith("VM"))
                     .filter(path -> !existingFiles.contains(path.getFileName().toString()))
-                    .filter(path -> !retryAfterByFilename.containsKey(path.getFileName().toString()))
+                    .filter(path -> !attemptedFilesThisRun.contains(path.getFileName().toString()))
                     .limit(batchLimit)
                     .toList();
         } catch (IOException e) {
@@ -149,8 +142,7 @@ public class SimRaDataLoader {
                                 metrics.recordFileFailed();
                                 log.error("Failed to process file: {}", path.getFileName(), e);
                             } finally {
-                                retryAfterByFilename.put(path.getFileName().toString(),
-                                        clock.millis() + Math.max(1, retryDelayMs));
+                                attemptedFilesThisRun.add(path.getFileName().toString());
                             }
                         })
                 ).get();
@@ -266,8 +258,7 @@ public class SimRaDataLoader {
         log.info("No eligible SimRa ride files remain. Import scanning will resume in {} ms.", rescanDelayMs);
         metrics.printFinalSummary();
         if (metrics.hasFailures()) {
-            log.warn("Some files failed during this run. Uncommitted source files become eligible for retry "
-                    + "{} ms after their last attempt.", retryDelayMs);
+            log.warn("Some files failed during this run. Attempted files will be skipped until the backend restarts.");
         }
     }
 
